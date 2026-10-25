@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-# مراقب أخبار السعودية — ملف واحد. الإعدادات في config.yaml
-# GDELT + Google News (لغات متعددة) -> تنقية -> تلقرام. وضع --fast للفحص السريع
+# مراقب أخبار السعودية — نسخة محسنة
+# GDELT + Google News + فلترة ذكية + تقييم جودة المصدر + ترتيب حسب الأهمية + تحجيم التكرار
 
 import argparse
 import datetime as dt
@@ -16,7 +16,7 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import requests
@@ -26,7 +26,7 @@ log = logging.getLogger("newsbot")
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
 RIYADH = dt.timezone(dt.timedelta(hours=3))
-UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/1.0; +https://github.com)"
+UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/2.1; +https://github.com)"
 
 GDELT_LANG_CODES = {
     "english": "en", "arabic": "ar", "french": "fr", "german": "de", "spanish": "es", "russian": "ru",
@@ -39,6 +39,65 @@ GDELT_LANG_CODES = {
     "finnish": "fi",
 }
 TRACKING = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ref", "cmpid"}
+
+TOPIC_KEYWORDS = {
+    "politics": ["سياسة", "دبلوماسية", "وزير", "رئيس", "مفاوضات", "تعاون", "أمن", "خارجية", "مبادرة"],
+    "economy": ["اقتصاد", "استثمار", "سوق", "أسهم", "عملة", "تمويل", "صادرات", "ميزانية", "أرامكو", "pif", "الاستثمار"],
+    "energy": ["طاقة", "نفط", "غاز", "أرامكو", "الطاقة", "oil", "gas", "energy"],
+    "tourism": ["سياحة", "السياحة", "tourism", "travel", "مقصد", "زيارة"],
+    "sports": ["كرة قدم", "رياضة", "مشجع", "دوري", "مباراة", "league", "sport", "football"],
+    "technology": ["تقنية", "ذكاء", "AI", "تكنولوجيا", "software", "tech", "ابتكار", "digital"],
+    "culture": ["ثقافة", "فن", "سينما", "فنون", "مهرجان", "ثقافي", "art"],
+    "religion": ["حج", "عمرة", "إسلام", "مكة", "جدة", "مقدسات", "hajj", "umrah"],
+    "real_estate": ["عقار", "مشاريع", "تطوير", "عقارات", "مدينة", "project", "real estate"],
+    "regional": ["الخليج", "الدول", "المنطقة", "تعاون", "شراكات", "إقليمي"],
+    "security": ["أمن", "مخابرات", "دفاع", "حظر", "تدابير", "security"],
+}
+
+SOURCE_PRIORITY = {
+    "reuters.com": 120,
+    "apnews.com": 115,
+    "bbc.com": 110,
+    "bbc.co.uk": 108,
+    "nytimes.com": 110,
+    "washingtonpost.com": 105,
+    "ft.com": 110,
+    "bloomberg.com": 112,
+    "aljazeera.com": 105,
+    "arabnews.com": 100,
+    "spa.gov.sa": 100,
+    "saudigazette.com.sa": 98,
+    "alriyadh.com": 96,
+    "sabq.org": 96,
+    "alwatan.com.sa": 95,
+    "gulfnews.com": 94,
+    "thenationalnews.com": 94,
+    "skynewsarabia.com": 94,
+    "okaz.com.sa": 94,
+    "aawsat.com": 92,
+    "alarabiya.net": 90,
+    "asharqbusiness.com": 90,
+    "theguardian.com": 100,
+    "cnn.com": 98,
+    "cnbc.com": 95,
+    "economist.com": 98,
+    "france24.com": 90,
+    "dw.com": 88,
+    "lemonde.fr": 88,
+    "elpais.com": 88,
+    "thehindu.com": 84,
+    "timesofisrael.com": 82,
+    "haaretz.com": 82,
+    "scmp.com": 84,
+    "nikkei.com": 82,
+    "koreaherald.com": 80,
+    "thejakartapost.com": 78,
+    "dawn.com": 78,
+    "xinhuanet.com": 70,
+    "cgtn.com": 68,
+    "tass.com": 67,
+    "rt.com": 66,
+}
 
 
 @dataclass
@@ -54,6 +113,9 @@ class Article:
     direct: bool
     tier: str = "other"
     uid: str = ""
+    topic: str = "general"
+    source_score: int = 0
+    relevance_score: int = 0
 
 
 def canonical_url(url: str) -> str:
@@ -87,6 +149,67 @@ def http_get(url: str, timeout: int = 20, **kw) -> Optional[requests.Response]:
     except requests.RequestException as e:
         log.warning("خطأ شبكة: %s", e)
         return None
+
+
+def source_priority(domain: str) -> int:
+    d = (domain or "").lower()
+    for key, score in SOURCE_PRIORITY.items():
+        if d == key or d.endswith("." + key):
+            return score
+    return 40
+
+
+def classify_topic(title: str) -> str:
+    text = title.lower()
+    for topic, keywords in TOPIC_KEYWORDS.items():
+        if any(k.lower() in text for k in keywords):
+            return topic
+    return "general"
+
+
+def compile_terms(terms: List[str]):
+    pats = []
+    for t in terms:
+        t = t.strip().lower()
+        if not t:
+            continue
+        if t.startswith("="):
+            base = re.escape(t[1:])
+            pats.append(re.compile(r"(?<!\w)(?:[وفبلك]?(?:ال)?)" + base + r"(?!\w)", re.U))
+        elif re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", t):
+            pats.append(re.compile(re.escape(t)))
+        else:
+            pats.append(re.compile(r"(?<!\w)" + re.escape(t), re.U))
+    return pats
+
+
+def title_matches(title: str, pats) -> bool:
+    return any(p.search(title.lower()) for p in pats)
+
+
+def compute_relevance(a: Article, cfg: dict) -> int:
+    title = (a.title or "").lower()
+    pats = compile_terms(cfg.get("title_must_match_any", []))
+    score = 0
+
+    if title_matches(title, pats):
+        score += 40
+
+    for kw in [
+        "saudi", "riyadh", "riyad", "jeddah", "neom", "aramco", "vision 2030", "hajj", "umrah",
+        "pif", "مكة", "جدة", "نيوم", "أرامكو", "رؤية 2030", "سعود", "السعود", "الرياض"
+    ]:
+        if kw.lower() in title:
+            score += 18
+
+    score += a.source_score // 10
+    score += 8 if a.tier in {"intl", "saudi_arab"} else 0
+    score += 5 if a.lang in {"ar", "en"} else 0
+
+    if title.count("saudi") + title.count("السعود") + title.count("riyadh") > 0:
+        score += 10
+
+    return max(0, score)
 
 
 def fetch_gdelt(cfg: dict, deadline: float) -> tuple[List[Article], Dict[str, int]]:
@@ -139,10 +262,20 @@ def parse_gdelt_items(items: list, cfg: dict) -> List[Article]:
         lang_name = (it.get("language") or "").strip().lower()
         country = (it.get("sourcecountry") or "").strip()
         domain = (it.get("domain") or host_of(url)).lower()
-        res.append(Article(
-            title=title, url=url, domain=domain[4:] if domain.startswith("www.") else domain,
-            source_name=domain, lang=GDELT_LANG_CODES.get(lang_name, lang_name or "?"),
-            country_ar=countries.get(country.lower(), country), published=pub, origin="gdelt", direct=True))
+        article = Article(
+            title=title,
+            url=url,
+            domain=domain[4:] if domain.startswith("www.") else domain,
+            source_name=domain,
+            lang=GDELT_LANG_CODES.get(lang_name, lang_name or "?"),
+            country_ar=countries.get(country.lower(), country),
+            published=pub,
+            origin="gdelt",
+            direct=True,
+        )
+        article.source_score = source_priority(article.domain)
+        article.topic = classify_topic(article.title)
+        res.append(article)
     return res
 
 
@@ -195,10 +328,20 @@ def parse_gnews_rss(xml_bytes: bytes, ed: dict) -> List[Article]:
         except (TypeError, ValueError):
             pass
         domain = host_of(src_url) if src_url else ""
-        res.append(Article(
-            title=title, url=link, domain=domain, source_name=src_name or domain or "Google News",
-            lang=ed["lang"], country_ar=ed.get("country_ar", ""), published=pub, origin="gnews",
-            direct=False))
+        article = Article(
+            title=title,
+            url=link,
+            domain=domain,
+            source_name=src_name or domain or "Google News",
+            lang=ed["lang"],
+            country_ar=ed.get("country_ar", ""),
+            published=pub,
+            origin="gnews",
+            direct=False,
+        )
+        article.source_score = source_priority(article.domain)
+        article.topic = classify_topic(article.title)
+        res.append(article)
     return res
 
 
@@ -223,27 +366,6 @@ class Translator:
         return None
 
 
-def compile_terms(terms: List[str]):
-    pats = []
-    for t in terms:
-        t = t.strip().lower()
-        if not t:
-            continue
-        if t.startswith("="):
-            base = re.escape(t[1:])
-            pats.append(re.compile(r"(?<!\w)(?:[وفبلك]?(?:ال)?)" + base + r"(?!\w)", re.U))
-        elif re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", t):
-            pats.append(re.compile(re.escape(t)))
-        else:
-            pats.append(re.compile(r"(?<!\w)" + re.escape(t), re.U))
-    return pats
-
-
-def title_matches(title: str, pats) -> bool:
-    t = title.lower()
-    return any(p.search(t) for p in pats)
-
-
 def assign_tier(a: Article, cfg: dict) -> str:
     dom = a.domain
     for tier in ("intl", "saudi_arab", "state"):
@@ -256,43 +378,6 @@ def assign_tier(a: Article, cfg: dict) -> str:
 
 
 TIER_RANK = {"intl": 0, "saudi_arab": 1, "state": 2, "other": 3}
-
-
-def select(arts: List[Article], cfg: dict, state: "State"):
-    pats = compile_terms(cfg.get("title_must_match_any", []))
-    strict = cfg.get("strict_title_filter", True)
-    stats = {"total": len(arts), "relevant": 0, "new": 0}
-    seen_batch = set()
-    cands: List[Article] = []
-    for a in arts:
-        if strict and not title_matches(a.title, pats):
-            continue
-        stats["relevant"] += 1
-        a.uid = "u" + h(canonical_url(a.url))
-        tkey = "t" + h(norm_title(a.title))
-        if a.uid in seen_batch or tkey in seen_batch:
-            continue
-        seen_batch.update([a.uid, tkey])
-        if state.seen(a.uid) or state.seen(tkey):
-            continue
-        assign_tier(a, cfg)
-        if a.tier == "other" and not cfg.get("include_other_tier", True):
-            continue
-        cands.append(a)
-    stats["new"] = len(cands)
-    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
-    cands.sort(key=lambda a: (TIER_RANK[a.tier], -((a.published or epoch).timestamp())))
-    per_lang: Dict[str, int] = {}
-    chosen: List[Article] = []
-    cap_lang = cfg.get("max_per_language", 3)
-    for a in cands:
-        if per_lang.get(a.lang, 0) >= cap_lang:
-            continue
-        per_lang[a.lang] = per_lang.get(a.lang, 0) + 1
-        chosen.append(a)
-        if len(chosen) >= cfg.get("max_messages_per_run", 12):
-            break
-    return chosen, stats
 
 
 class State:
@@ -333,22 +418,118 @@ class State:
         self.path.write_text(json.dumps(self.data, ensure_ascii=False, separators=(",", ":")), "utf-8")
 
 
+def strong_topic_priority(topic: str) -> int:
+    weights = {
+        "politics": 18,
+        "economy": 18,
+        "energy": 22,
+        "tourism": 16,
+        "sports": 12,
+        "technology": 10,
+        "culture": 8,
+        "religion": 18,
+        "real_estate": 16,
+        "regional": 14,
+        "security": 20,
+        "general": 10,
+    }
+    return weights.get(topic, 10)
+
+
+def select(arts: List[Article], cfg: dict, state: State):
+    pats = compile_terms(cfg.get("title_must_match_any", []))
+    strict = cfg.get("strict_title_filter", True)
+    stats = {"total": len(arts), "relevant": 0, "new": 0}
+    seen_batch: Set[str] = set()
+    cands: List[Article] = []
+
+    for a in arts:
+        if a.domain:
+            a.source_score = source_priority(a.domain)
+        a.topic = classify_topic(a.title)
+        assign_tier(a, cfg)
+        a.relevance_score = compute_relevance(a, cfg) + strong_topic_priority(a.topic)
+        if strict and not title_matches(a.title, pats):
+            continue
+        stats["relevant"] += 1
+
+        a.uid = "u" + h(canonical_url(a.url))
+        tkey = "t" + h(norm_title(a.title))
+        dedupe_key = "d" + h(norm_title(a.title)[:180])
+
+        if a.uid in seen_batch or tkey in seen_batch or dedupe_key in seen_batch:
+            continue
+        seen_batch.update([a.uid, tkey, dedupe_key])
+
+        if state.seen(a.uid) or state.seen(tkey):
+            continue
+
+        if a.tier == "other" and not cfg.get("include_other_tier", True):
+            continue
+
+        cands.append(a)
+
+    stats["new"] = len(cands)
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+    cands.sort(key=lambda a: (
+        -(a.relevance_score + (100 if a.tier == "saudi_arab" else 0) + (60 if a.tier == "intl" else 0)),
+        -((a.published or epoch).timestamp()),
+        -a.source_score,
+    ))
+
+    per_lang: Dict[str, int] = {}
+    chosen: List[Article] = []
+    cap_lang = cfg.get("max_per_language", 3)
+    for a in cands:
+        if per_lang.get(a.lang, 0) >= cap_lang:
+            continue
+        per_lang[a.lang] = per_lang.get(a.lang, 0) + 1
+        chosen.append(a)
+        if len(chosen) >= cfg.get("max_messages_per_run", 12):
+            break
+    return chosen, stats
+
+
+def topic_label(topic: str) -> str:
+    mapping = {
+        "politics": "سياسة",
+        "economy": "اقتصاد",
+        "energy": "طاقة",
+        "tourism": "سياحة",
+        "sports": "رياضة",
+        "technology": "تقنية",
+        "culture": "ثقافة",
+        "religion": "دين/حج",
+        "real_estate": "مشاريع/عقار",
+        "regional": "منطقة/شراكات",
+        "security": "أمن",
+        "general": "عام",
+    }
+    return mapping.get(topic, "عام")
+
+
 def format_message(a: Article, cfg: dict, tr_title: Optional[str] = None) -> str:
     e = html.escape
     tier_label = cfg["tiers"][a.tier]["label"]
     lang_ar = cfg.get("languages_ar", {}).get(a.lang, a.lang)
+    topic = topic_label(a.topic)
+
     lines = [f"📰 <b>{e(a.title[:220])}</b>"]
     if tr_title and norm_title(tr_title) != norm_title(a.title):
         lines.append(f"🔁 <i>{e(tr_title[:220])}</i>")
-    lines += ["", tier_label]
+    lines += ["", f"📌 <b>{topic}</b> • <b>{a.relevance_score}</b> نقطة", tier_label]
+
     src = e(a.source_name)
     if a.domain and a.domain != a.source_name:
         src += f" ({e(a.domain)})"
     lines.append(f"🏛 {src}")
+
     where = " · ".join(x for x in [lang_ar, a.country_ar] if x)
     lines.append(f"🌐 {where}")
     if a.published:
         lines.append("🕒 " + a.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+    if a.relevance_score >= 80:
+        lines.append("🚨 خبر مهم جدًا")
     if a.lang != "ar" and a.direct:
         tr = "https://translate.google.com/translate?sl=auto&tl=ar&u=" + quote_plus(a.url)
         lines.append(f'🔤 <a href="{e(tr, quote=True)}">ترجمة الصفحة للعربية</a>')
