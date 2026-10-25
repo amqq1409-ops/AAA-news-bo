@@ -394,6 +394,25 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     return "\n".join(lines)
 
 
+def translate_title(title: str):
+    url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=" + quote_plus(title[:250])
+    response = http_get(url, timeout=12)
+    if response is None or response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+        if not isinstance(payload, list) or not payload or not isinstance(payload[0], list):
+            return None
+        translated = "".join(
+            segment[0]
+            for segment in payload[0]
+            if isinstance(segment, list) and segment and isinstance(segment[0], str)
+        ).strip()
+        return translated or None
+    except Exception:
+        return None
+
+
 def apply_saudi_focus(cfg: dict) -> dict:
     cfg = dict(cfg)
     cfg["saudi_focus"] = True
@@ -477,14 +496,8 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
         if store is not None:
             store.upsert_article(article)
         translated = None
-        if article.lang != "ar":
-            tr = http_get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=" + quote_plus(article.title[:250]), timeout=12)
-            try:
-                if tr is not None and tr.status_code == 200:
-                    payload = tr.json()
-                    translated = "".join(seg[0] for seg in payload[0] if seg and seg[0])
-            except Exception:
-                translated = None
+        if cfg.get("translate_titles", True) and article.lang != "ar":
+            translated = translate_title(article.title)
         msg = format_message(article, cfg, translated)
         if tg.send_text(msg):
             state.mark(article)
