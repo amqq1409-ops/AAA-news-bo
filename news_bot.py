@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# مراقب أخبار السعودية — نسخة محسنة
+# مراقب أخبار السعودية — نسخة محسنة + قاعدة بيانات + إحصاءات التشغيل
 # GDELT + Google News + فلترة ذكية + تقييم جودة المصدر + ترتيب حسب الأهمية + تحجيم التكرار
 
 import argparse
@@ -22,11 +22,14 @@ from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 import requests
 import yaml
 
+from data_store import ArticleStore
+
 log = logging.getLogger("newsbot")
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
+DB_PATH = ROOT / "data" / "news.db"
 RIYADH = dt.timezone(dt.timedelta(hours=3))
-UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/2.1; +https://github.com)"
+UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/2.3; +https://github.com)"
 
 GDELT_LANG_CODES = {
     "english": "en", "arabic": "ar", "french": "fr", "german": "de", "spanish": "es", "russian": "ru",
@@ -225,7 +228,7 @@ def fetch_gdelt(cfg: dict, deadline: float) -> tuple[List[Article], Dict[str, in
                f'&mode=artlist&format=json&sort=datedesc&maxrecords={g.get("maxrecords", 60)}'
                f'&timespan={g.get("timespan", "3h")}')
         data = None
-        for attempt in range(2):
+        for _ in range(2):
             time.sleep(9)
             r = http_get(url, timeout=30)
             if r is None:
@@ -375,9 +378,6 @@ def assign_tier(a: Article, cfg: dict) -> str:
                 return tier
     a.tier = "other"
     return "other"
-
-
-TIER_RANK = {"intl": 0, "saudi_arab": 1, "state": 2, "other": 3}
 
 
 class State:
@@ -570,6 +570,7 @@ class Telegram:
 
 
 def run(cfg: dict, state: State, tg: Telegram, fast: bool = False) -> int:
+    store = ArticleStore(DB_PATH)
     if fast:
         keys = set(cfg.get("fast_editions", []))
         cfg = dict(cfg)
@@ -595,11 +596,15 @@ def run(cfg: dict, state: State, tg: Telegram, fast: bool = False) -> int:
     sent = 0
     translator = Translator(cfg.get("translate_titles", False))
     for a in chosen:
+        a.uid = "u" + h(canonical_url(a.url))
+        store.upsert_article(a)
         tr = translator.title_ar(a.title) if a.lang != "ar" else None
         if tg.send_text(format_message(a, cfg, tr)):
             state.mark(a)
+            store.record_sent(a)
             sent += 1
         time.sleep(3.2)
+    store.log_run(stats, counts, sent)
     log.info("جُمع %d | مطابق %d | جديد %d | أُرسل %d", stats["total"], stats["relevant"], stats["new"], sent)
 
     g_total = sum(v for k, v in counts.items() if k.startswith("gdelt:"))
@@ -618,12 +623,16 @@ def run(cfg: dict, state: State, tg: Telegram, fast: bool = False) -> int:
         if zero:
             lines.append("بلا نتائج: " + "، ".join(zero[:12]))
         tg.send_text("\n".join(lines))
+        tg.send_text(store.stats_text(hours=24))
     elif sent == 0 and not fast and state.should_warn("heartbeat"):
         tg.send_text(f"💤 <b>المراقب يعمل</b> — لا أخبار جديدة تستحق الإرسال الآن.\n"
                      f"فحصت {stats['total']} خبراً، منها {stats['relevant']} مطابقاً للسعودية.")
 
     if (n_total + g_total) == 0 and state.should_warn("noresults"):
         tg.send_text("⚠️ لم أحصل على أي أخبار من المصدرين. راجع سجل التشغيل في GitHub Actions.")
+
+    if sent > 0 and not fast and not manual:
+        tg.send_text(store.stats_text(hours=24))
     return sent
 
 
@@ -633,13 +642,20 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--fast", action="store_true", help="تشغيل سريع: أهم النسخ فقط، آخر ساعة")
     ap.add_argument("--test-telegram", action="store_true")
+    ap.add_argument("--stats", action="store_true", help="عرض إحصاءات قاعدة البيانات")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = yaml.safe_load(Path(args.config).read_text("utf-8"))
     tg = Telegram(dry_run=args.dry_run)
+
     if args.test_telegram:
         tg.send_text("✅ القناة جاهزة! سيصلك هنا ما يُنشر عن السعودية في إعلام العالم.")
         return
+    if args.stats:
+        store = ArticleStore(DB_PATH)
+        tg.send_text(store.stats_text(hours=24))
+        return
+
     state = State()
     run(cfg, state, tg, fast=args.fast)
     state.save()
