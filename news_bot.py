@@ -249,6 +249,111 @@ def fetch_gdelt(cfg, deadline):
     return out, counts
 
 
+def x_search_queries(accounts, terms, max_length=512):
+    term_query = "(" + " OR ".join(f'"{term}"' if " " in term else term for term in terms) + ") -is:retweet"
+    prefix = f" {term_query}"
+    groups = []
+    current = []
+    for account in accounts:
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", account):
+            logging.warning("Skipping invalid X username: %s", account)
+            continue
+        candidate = current + [account]
+        account_query = "(" + " OR ".join(f"from:{handle}" for handle in candidate) + ")"
+        if current and len(account_query + prefix) > max_length:
+            groups.append("(" + " OR ".join(f"from:{handle}" for handle in current) + ")" + prefix)
+            current = [account]
+        else:
+            current = candidate
+    if current:
+        groups.append("(" + " OR ".join(f"from:{handle}" for handle in current) + ")" + prefix)
+    return groups
+
+
+def parse_x_items(payload):
+    users = {user.get("id"): user for user in payload.get("includes", {}).get("users", [])}
+    out = []
+    for item in payload.get("data", []):
+        author = users.get(item.get("author_id"), {})
+        username = author.get("username")
+        post_id = item.get("id")
+        text = (item.get("text") or "").strip()
+        if not username or not post_id or not text:
+            continue
+        published = None
+        try:
+            published = dt.datetime.fromisoformat(item.get("created_at", "").replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError):
+            pass
+        article = Article(
+            text,
+            f"https://x.com/{username}/status/{post_id}",
+            "x.com",
+            f'{author.get("name") or username} (@{username})',
+            item.get("lang", "en"),
+            "X",
+            published,
+            "x",
+            True,
+        )
+        out.append(article)
+    return out
+
+
+def fetch_x(cfg, deadline):
+    x_cfg = cfg.get("x", {})
+    token = os.getenv("X_BEARER_TOKEN")
+    if not x_cfg.get("enabled", True) or not token:
+        if x_cfg.get("enabled", True):
+            logging.info("X collection skipped: X_BEARER_TOKEN is not configured")
+        return [], {"x": 0}
+
+    terms = x_cfg.get(
+        "query_terms",
+        ["Saudi Arabia", "Saudi", "SaudiArabia", "Riyadh", "Jeddah", "Aramco", "NEOM", "KSA", "Vision 2030",
+         "السعودية", "الرياض", "نيوم", "أرامكو"],
+    )
+    queries = x_search_queries(x_cfg.get("accounts", []), terms)
+    start_time = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=x_cfg.get("lookback_minutes", 180))
+    params_base = {
+        "max_results": min(max(int(x_cfg.get("max_results", 100)), 10), 100),
+        "tweet.fields": "created_at,lang,author_id",
+        "expansions": "author_id",
+        "user.fields": "name,username",
+        "start_time": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sort_order": "recency",
+    }
+    articles = []
+    counts = {}
+    for index, query in enumerate(queries, start=1):
+        if time.monotonic() > deadline:
+            break
+        try:
+            response = requests.get(
+                "https://api.x.com/2/tweets/search/recent",
+                headers={"Authorization": "Bearer " + token, "User-Agent": UA},
+                params={**params_base, "query": query},
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            logging.warning("X API request failed: %s", exc)
+            counts[f"x:{index}"] = 0
+            continue
+        if response.status_code != 200:
+            logging.warning("X API returned HTTP %s: %s", response.status_code, response.text[:300])
+            counts[f"x:{index}"] = 0
+            continue
+        try:
+            payload = response.json()
+            items = parse_x_items(payload)
+            counts[f"x:{index}"] = len(items)
+            articles.extend(items)
+        except (ValueError, TypeError, AttributeError) as exc:
+            logging.warning("X API response parse failed: %s", exc)
+            counts[f"x:{index}"] = 0
+    return articles, counts
+
+
 def parse_gnews_rss(xml_bytes, edition):
     try:
         root = ET.fromstring(xml_bytes)
@@ -374,6 +479,16 @@ def topic_label(topic: str) -> str:
 
 
 def format_message(article: Article, cfg: dict, translated_title=None) -> str:
+    if article.origin == "x":
+        lines = ["𝕏 منشور جديد"]
+        lines.append(f"<b>{html.escape(article.title[:1000])}</b>")
+        if translated_title:
+            lines.append(f"🔁 <i>{html.escape(translated_title[:1000])}</i>")
+        lines.append(f"👤 {html.escape(article.source_name)}")
+        if article.published:
+            lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+        lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">عرض المنشور</a>')
+        return "\n".join(lines)
     topic = topic_label(article.topic)
     breaking = cfg.get("breaking_mode", False) and getattr(article, "breaking_score", 0) >= cfg.get("breaking_threshold", 78)
     source = article.source_name or article.domain
@@ -432,7 +547,7 @@ def select_articles(articles, cfg, state):
             if not any(k.lower() in article.title.lower() for k in ["saudi", "riyadh", "السعودية", "الرياض", "أرامكو", "نيوم", "رؤية 2030", "بن سلمان"]):
                 continue
         selected.append(article)
-    selected.sort(key=lambda a: (-(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
+    selected.sort(key=lambda a: (a.origin != "x", -(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
     max_per_lang = cfg.get("breaking_per_language", 2) if cfg.get("breaking_mode") else cfg.get("max_per_language", 2)
     out, counts = [], {}
     for a in selected:
@@ -464,6 +579,9 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
     deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
     articles = []
     counts = {}
+    x_articles, x_counts = fetch_x(cfg, deadline)
+    articles.extend(x_articles)
+    counts.update(x_counts)
     arts, c = fetch_gnews(cfg, deadline)
     articles.extend(arts)
     counts.update(c)
