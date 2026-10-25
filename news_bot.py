@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import email.utils
 import hashlib
 import html
 import json
@@ -10,7 +9,6 @@ import logging
 import os
 import re
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
@@ -18,6 +16,7 @@ import requests
 import yaml
 
 from data_store import ArticleStore
+from news_sources import fetch_sources
 
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
@@ -198,107 +197,29 @@ def http_get(url: str, timeout: int = 20, **kwargs):
         return None
 
 
-def parse_gdelt_items(items, cfg):
-    out = []
-    for it in items or []:
-        title = (it.get("title") or "").strip()
-        url = (it.get("url") or "").strip()
-        if not title or not url:
-            continue
-        lang_name = (it.get("language") or "").strip().lower()
-        lang = GDELT_LANG_CODES.get(lang_name, lang_name or "en")
-        pub = None
-        sd = it.get("seendate") or ""
-        try:
-            pub = dt.datetime.strptime(sd, "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc)
-        except Exception:
-            pass
-        domain = (it.get("domain") or host_of(url)).lower()
-        article = Article(title, url, domain, domain, lang, it.get("sourcecountry", ""), pub, "gdelt", True)
+def build_articles(items, cfg):
+    articles = []
+    for item in items:
+        lang = (item.get("lang") or "en").strip().lower()
+        lang = GDELT_LANG_CODES.get(lang, lang)
+        domain = (item.get("domain") or host_of(item.get("url", ""))).lower()
+        article = Article(
+            item["title"],
+            item["url"],
+            domain,
+            item.get("source_name", ""),
+            lang,
+            item.get("country_ar", ""),
+            item.get("published"),
+            item.get("origin", "news"),
+            item.get("direct", False),
+        )
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
         assign_tier(article, cfg)
-        out.append(article)
-    return out
-
-
-def fetch_gdelt(cfg, deadline):
-    gd = cfg.get("gdelt", {})
-    if not gd.get("enabled", True):
-        return [], {}
-    out = []
-    counts = {}
-    for lang in gd.get("languages", ["english", "arabic"]):
-        if time.monotonic() > deadline:
-            break
-        query = gd.get("query_terms", '"Saudi Arabia" OR Riyadh')
-        url = "https://api.gdeltproject.org/api/v2/doc/doc?query=" + quote_plus(f'{query} sourcelang:{lang}') + f'&mode=artlist&format=json&maxrecords={gd.get("maxrecords", 60)}&sort=datedesc&timespan={gd.get("timespan", "2h")}'
-        r = http_get(url, timeout=30)
-        if r is None or r.status_code != 200:
-            counts[f"gdelt:{lang}"] = 0
-            continue
-        try:
-            data = r.json()
-            items = (data or {}).get("articles") or []
-            counts[f"gdelt:{lang}"] = len(items)
-            out.extend(parse_gdelt_items(items, cfg))
-        except Exception as e:
-            logging.warning("GDELT parse error %s: %s", lang, e)
-            counts[f"gdelt:{lang}"] = 0
-    return out, counts
-
-
-def parse_gnews_rss(xml_bytes, edition):
-    try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError:
-        return []
-    out = []
-    for item in root.iter("item"):
-        title = (item.findtext("title") or "").strip()
-        link = (item.findtext("link") or "").strip()
-        if not title or not link:
-            continue
-        src = item.find("source")
-        source_name = (src.text or "").strip() if src is not None and src is not None else ""
-        pub = None
-        try:
-            pub = email.utils.parsedate_to_datetime(item.findtext("pubDate") or "")
-            if pub.tzinfo is None:
-                pub = pub.replace(tzinfo=dt.timezone.utc)
-        except Exception:
-            pub = None
-        domain = host_of(link) or (src.get("url", "") if src is not None else "")
-        article = Article(title, link, domain, source_name or domain or "Google News", edition.get("lang", "en"), edition.get("country_ar", ""), pub, "gnews", False)
-        article.topic = classify_topic(article.title)
-        article.relevance_score = compute_relevance(article, edition)
-        article.breaking_score = breaking_score(article)
-        assign_tier(article, edition)
-        out.append(article)
-    return out
-
-
-def fetch_gnews(cfg, deadline):
-    gn = cfg.get("google_news", {})
-    if not gn.get("enabled", True):
-        return [], {}
-    out = []
-    counts = {}
-    editions = gn.get("editions", [])
-    for ed in editions:
-        if time.monotonic() > deadline:
-            break
-        q = ed.get("query", '"Saudi Arabia"')
-        url = f'https://news.google.com/rss/search?q={quote_plus(q)}&hl={ed.get("hl", "en-US")}&gl={ed.get("gl", "US")}&ceid={quote_plus(ed.get("ceid", "US:en"))}'
-        r = http_get(url)
-        if r is None or r.status_code != 200:
-            counts[f'gnews:{ed.get("lang")}-{ed.get("gl")}'] = 0
-            continue
-        items = parse_gnews_rss(r.content, ed)
-        counts[f'gnews:{ed.get("lang")}-{ed.get("gl")}'] = len(items)
-        out.extend(items)
-    return out, counts
+        articles.append(article)
+    return articles
 
 
 class State:
@@ -462,14 +383,8 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
     cfg = apply_saudi_focus(cfg)
 
     deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
-    articles = []
-    counts = {}
-    arts, c = fetch_gnews(cfg, deadline)
-    articles.extend(arts)
-    counts.update(c)
-    arts2, c2 = fetch_gdelt(cfg, deadline)
-    articles.extend(arts2)
-    counts.update(c2)
+    items, counts = fetch_sources(cfg, deadline)
+    articles = build_articles(items, cfg)
 
     chosen = select_articles(articles, cfg, state)
     sent = 0

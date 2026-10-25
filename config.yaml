@@ -12,6 +12,37 @@ gdelt:
   query_terms: '("Saudi Arabia" OR Riyadh OR Aramco OR NEOM OR "bin Salman")'
   languages: [english, arabic, french, german, spanish, russian, chinese, japanese, korean, turkish, persian, urdu, hindi, indonesian, portuguese, italian, hebrew, thai, vietnamese, malay, bengali, tamil, polish, dutch, ukrainian, greek, swedish, czech, romanian, hungarian, bulgarian, serbian, kazakh, uzbek, swahili, amharic, somali, hausa, nepali, norwegian, danish, finnish]
 
+newsapi:
+  enabled: true
+  api_key_env: NEWSAPI_API_KEY
+  endpoint: "https://newsapi.org/v2/everything"
+  query: '"Saudi Arabia" OR Riyadh OR Aramco OR NEOM OR "bin Salman"'
+  language: all
+  page_size: 100
+  sort_by: publishedAt
+  lang: und
+
+bing_news:
+  enabled: false
+  api_key_env: BING_NEWS_API_KEY
+  query: '"Saudi Arabia" OR Riyadh OR Aramco OR NEOM OR "bin Salman"'
+  market: all
+  count: 100
+  sort_by: Date
+  safe_search: Off
+  lang: und
+
+source_workers: 12
+
+rss:
+  enabled: true
+  feeds:
+    - {name: "وكالة الأنباء السعودية", url: "https://www.spa.gov.sa/rss.xml", lang: ar, country_ar: "السعودية"}
+    - {name: "الجزيرة", url: "https://www.aljazeera.net/aljazeerarss/ar/mostRead", lang: ar, country_ar: "قطر"}
+    - {name: "BBC Arabic", url: "https://feeds.bbci.co.uk/arabic/rss.xml", lang: ar, country_ar: "بريطانيا"}
+    - {name: "France 24 Arabic", url: "https://www.france24.com/ar/rss", lang: ar, country_ar: "فرنسا"}
+    - {name: "Al Arabiya", url: "https://www.alarabiya.net/tools/rss", lang: ar, country_ar: "السعودية"}
+
 google_news:
   enabled: true
   when: "3h"
