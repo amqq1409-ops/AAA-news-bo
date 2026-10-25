@@ -161,7 +161,7 @@ def fetch_newsapi(config, deadline):
     token = os.getenv(config.get("api_key_env", "NEWSAPI_API_KEY"))
     if not config.get("enabled", True) or not token:
         if config.get("enabled", True):
-            logging.info("NewsAPI skipped: %s is not set", config.get("api_key_env", "NEWSAPI_API_KEY"))
+            logging.info("NewsAPI skipped: API key environment variable is not set")
         return []
     if time.monotonic() >= deadline:
         return []
@@ -218,7 +218,7 @@ def fetch_bing_news(config, deadline):
     token = os.getenv(config.get("api_key_env", "BING_NEWS_API_KEY"))
     if not config.get("enabled", True) or not token:
         if config.get("enabled", True):
-            logging.info("Bing News skipped: %s is not set", config.get("api_key_env", "BING_NEWS_API_KEY"))
+            logging.info("Bing News skipped: API key environment variable is not set")
         return []
     if time.monotonic() >= deadline:
         return []
