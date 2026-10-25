@@ -35,6 +35,43 @@ GDELT_LANG_CODES = {
     "amharic": "am", "somali": "so", "hausa": "ha", "nepali": "ne", "norwegian": "no", "danish": "da",
     "finnish": "fi",
 }
+SOURCE_COUNTRY_CODES = {
+    "united states": "US", "usa": "US", "united kingdom": "GB", "uk": "GB", "britain": "GB",
+    "france": "FR", "germany": "DE", "spain": "ES", "italy": "IT", "russia": "RU",
+    "china": "CN", "japan": "JP", "south korea": "KR", "korea, republic of": "KR",
+    "turkey": "TR", "türkiye": "TR", "iran": "IR", "pakistan": "PK", "india": "IN",
+    "indonesia": "ID", "brazil": "BR", "saudi arabia": "SA", "united arab emirates": "AE",
+    "qatar": "QA", "egypt": "EG", "israel": "IL", "canada": "CA", "australia": "AU",
+    "kuwait": "KW", "bahrain": "BH", "oman": "OM", "jordan": "JO", "lebanon": "LB",
+    "iraq": "IQ", "malaysia": "MY", "singapore": "SG", "portugal": "PT", "switzerland": "CH",
+    "netherlands": "NL", "thailand": "TH", "vietnam": "VN", "poland": "PL", "ukraine": "UA",
+    "greece": "GR", "sweden": "SE", "norway": "NO", "denmark": "DK", "finland": "FI",
+    "czechia": "CZ", "czech republic": "CZ", "romania": "RO", "hungary": "HU",
+    "bulgaria": "BG", "serbia": "RS", "kazakhstan": "KZ", "uzbekistan": "UZ",
+    "kenya": "KE", "nigeria": "NG", "south africa": "ZA", "ethiopia": "ET", "somalia": "SO",
+    "ghana": "GH", "senegal": "SN", "morocco": "MA", "algeria": "DZ", "tunisia": "TN",
+    "bangladesh": "BD", "nepal": "NP", "mexico": "MX", "argentina": "AR", "colombia": "CO",
+    "chile": "CL", "new zealand": "NZ", "ireland": "IE", "belgium": "BE", "austria": "AT",
+    "philippines": "PH", "taiwan": "TW", "hong kong": "HK", "ivory coast": "CI",
+    "côte d'ivoire": "CI", "tanzania": "TZ", "uganda": "UG", "sudan": "SD", "libya": "LY",
+    "أمريكا": "US", "الولايات المتحدة": "US", "بريطانيا": "GB", "المملكة المتحدة": "GB",
+    "فرنسا": "FR", "ألمانيا": "DE", "إسبانيا": "ES", "إيطاليا": "IT", "روسيا": "RU",
+    "الصين": "CN", "اليابان": "JP", "كوريا الجنوبية": "KR", "تركيا": "TR", "إيران": "IR",
+    "باكستان": "PK", "الهند": "IN", "إندونيسيا": "ID", "البرازيل": "BR", "السعودية": "SA",
+    "الإمارات": "AE", "قطر": "QA", "مصر": "EG", "إسرائيل": "IL", "كندا": "CA",
+    "أستراليا": "AU", "الكويت": "KW", "البحرين": "BH", "عمان": "OM", "عُمان": "OM",
+    "الأردن": "JO", "لبنان": "LB", "العراق": "IQ", "ماليزيا": "MY", "سنغافورة": "SG",
+    "البرتغال": "PT", "سويسرا": "CH", "هولندا": "NL", "تايلاند": "TH", "فيتنام": "VN",
+    "بولندا": "PL", "أوكرانيا": "UA", "اليونان": "GR", "السويد": "SE", "النرويج": "NO",
+    "الدنمارك": "DK", "فنلندا": "FI", "التشيك": "CZ", "رومانيا": "RO", "المجر": "HU",
+    "بلغاريا": "BG", "صربيا": "RS", "كازاخستان": "KZ", "أوزبكستان": "UZ", "كينيا": "KE",
+    "نيجيريا": "NG", "جنوب أفريقيا": "ZA", "إثيوبيا": "ET", "الصومال": "SO", "غانا": "GH",
+    "السنغال": "SN", "المغرب": "MA", "الجزائر": "DZ", "تونس": "TN", "بنغلاديش": "BD",
+    "نيبال": "NP", "المكسيك": "MX", "الأرجنتين": "AR", "كولومبيا": "CO", "تشيلي": "CL",
+    "نيوزيلندا": "NZ", "أيرلندا": "IE", "بلجيكا": "BE", "النمسا": "AT", "الفلبين": "PH",
+    "تايوان": "TW", "هونغ كونغ": "HK", "ساحل العاج": "CI", "تنزانيا": "TZ", "أوغندا": "UG",
+    "السودان": "SD", "ليبيا": "LY",
+}
 TRACKING = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ref", "cmpid"}
 TOPIC_KEYWORDS = {
     "politics": ["سياسة", "دبلوماسية", "وزير", "رئيس", "مفاوضات", "تعاون", "أمن", "خارجية", "مبادرة"],
@@ -67,13 +104,14 @@ SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.c
 
 
 class Article:
-    def __init__(self, title, url, domain, source_name, lang, country_ar, published, origin, direct=False):
+    def __init__(self, title, url, domain, source_name, lang, country_ar, published, origin, direct=False, country_code=""):
         self.title = title.strip()
         self.url = canonical_url(url)
         self.domain = domain.lower()
         self.source_name = source_name or self.domain or "News"
         self.lang = lang or "en"
         self.country_ar = country_ar or ""
+        self.country_code = country_code or ""
         self.published = published
         self.origin = origin
         self.direct = direct
@@ -104,6 +142,33 @@ def host_of(url: str) -> str:
 
 def norm_title(t: str) -> str:
     return re.sub(r"[\W_]+", " ", t.lower(), flags=re.U).strip()
+
+
+def source_country_code(country: str) -> str:
+    value = (country or "").strip()
+    if len(value) == 2 and value.isascii() and value.isalpha():
+        return value.upper()
+    code = SOURCE_COUNTRY_CODES.get(value.casefold())
+    if code:
+        return code
+    match = re.search(r"\(([a-z]{2})\)\s*$", value, re.I)
+    return match.group(1).upper() if match else ""
+
+
+def country_flag(country_code: str) -> str:
+    code = (country_code or "").upper()
+    if len(code) != 2 or not code.isascii() or not code.isalpha():
+        return ""
+    return "".join(chr(ord(char) + 127397) for char in code)
+
+
+def published_utc(article: Article):
+    published = article.published
+    if published is None:
+        return None
+    if published.tzinfo is None:
+        return published.replace(tzinfo=dt.timezone.utc)
+    return published.astimezone(dt.timezone.utc)
 
 
 def h(s: str) -> str:
@@ -198,6 +263,30 @@ def http_get(url: str, timeout: int = 20, **kwargs):
         return None
 
 
+def translate_title(title: str):
+    url = "https://translate.googleapis.com/translate_a/single"
+    params = {"client": "gtx", "sl": "auto", "tl": "ar", "dt": "t", "q": title[:250]}
+    for attempt in range(2):
+        response = http_get(url, timeout=12, params=params)
+        try:
+            if response is not None and response.status_code == 200:
+                payload = response.json()
+                segments = payload[0] if isinstance(payload, list) and payload else []
+                translated = "".join(
+                    segment[0]
+                    for segment in segments
+                    if isinstance(segment, list) and segment and isinstance(segment[0], str)
+                ).strip()
+                if translated:
+                    return translated
+        except (IndexError, TypeError, ValueError):
+            pass
+        if attempt == 0:
+            time.sleep(1)
+    logging.warning("Could not translate title to Arabic")
+    return None
+
+
 def parse_gdelt_items(items, cfg):
     out = []
     for it in items or []:
@@ -214,7 +303,11 @@ def parse_gdelt_items(items, cfg):
         except Exception:
             pass
         domain = (it.get("domain") or host_of(url)).lower()
-        article = Article(title, url, domain, domain, lang, it.get("sourcecountry", ""), pub, "gdelt", True)
+        source_country = it.get("sourcecountry", "")
+        article = Article(
+            title, url, domain, domain, lang, source_country, pub, "gdelt", True,
+            country_code=source_country_code(source_country),
+        )
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
@@ -270,7 +363,11 @@ def parse_gnews_rss(xml_bytes, edition):
         except Exception:
             pub = None
         domain = host_of(link) or (src.get("url", "") if src is not None else "")
-        article = Article(title, link, domain, source_name or domain or "Google News", edition.get("lang", "en"), edition.get("country_ar", ""), pub, "gnews", False)
+        article = Article(
+            title, link, domain, source_name or domain or "Google News", edition.get("lang", "en"),
+            edition.get("country_ar", ""), pub, "gnews", False,
+            country_code=source_country_code(edition.get("gl", "")),
+        )
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, edition)
         article.breaking_score = breaking_score(article)
@@ -289,7 +386,8 @@ def fetch_gnews(cfg, deadline):
     for ed in editions:
         if time.monotonic() > deadline:
             break
-        q = ed.get("query", '"Saudi Arabia"')
+        query = ed.get("query", '"Saudi Arabia"')
+        q = f'({query}) when:{gn.get("when", "3h")}'
         url = f'https://news.google.com/rss/search?q={quote_plus(q)}&hl={ed.get("hl", "en-US")}&gl={ed.get("gl", "US")}&ceid={quote_plus(ed.get("ceid", "US:en"))}'
         r = http_get(url)
         if r is None or r.status_code != 200:
@@ -386,8 +484,13 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     lines.append(title_line)
     lines.append(f"📌 <b>{topic}</b> • {getattr(article, 'breaking_score', article.relevance_score)} نقطة • {label}")
     lines.append(f"🏛 {html.escape(source)}")
-    if article.country_ar:
-        lines.append(f"🌐 {html.escape(article.country_ar)}")
+    country_code = getattr(article, "country_code", "") or source_country_code(article.country_ar)
+    flag = country_flag(country_code)
+    if article.country_ar or flag:
+        country_label = f"{flag} " if flag else ""
+        country_name = article.country_ar or country_code
+        code_label = f" · {country_code}" if country_code else ""
+        lines.append(f"🌐 {country_label}{html.escape(country_name)}{code_label}")
     if article.published:
         lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
     lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
@@ -414,7 +517,19 @@ def select_articles(articles, cfg, state):
     pats = compile_terms(cfg.get("title_must_match_any", []))
     selected = []
     seen = set()
+    now = dt.datetime.now(dt.timezone.utc)
+    max_age_hours = max(0, float(cfg.get("max_article_age_hours", 3)))
+    freshest = []
     for article in articles:
+        published = published_utc(article)
+        if published is None:
+            continue
+        age = now - published
+        if age > dt.timedelta(hours=max_age_hours) or age < dt.timedelta(minutes=-5):
+            continue
+        freshest.append((published, article))
+    freshest.sort(key=lambda item: item[0], reverse=True)
+    for _, article in freshest:
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
@@ -432,7 +547,11 @@ def select_articles(articles, cfg, state):
             if not any(k.lower() in article.title.lower() for k in ["saudi", "riyadh", "السعودية", "الرياض", "أرامكو", "نيوم", "رؤية 2030", "بن سلمان"]):
                 continue
         selected.append(article)
-    selected.sort(key=lambda a: (-(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
+    selected.sort(key=lambda a: (
+        -published_utc(a).timestamp(),
+        -(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score),
+        -a.source_score,
+    ))
     max_per_lang = cfg.get("breaking_per_language", 2) if cfg.get("breaking_mode") else cfg.get("max_per_language", 2)
     out, counts = [], {}
     for a in selected:
@@ -477,14 +596,8 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
         if store is not None:
             store.upsert_article(article)
         translated = None
-        if article.lang != "ar":
-            tr = http_get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=" + quote_plus(article.title[:250]), timeout=12)
-            try:
-                if tr is not None and tr.status_code == 200:
-                    payload = tr.json()
-                    translated = "".join(seg[0] for seg in payload[0] if seg and seg[0])
-            except Exception:
-                translated = None
+        if cfg.get("translate_titles", True) and article.lang != "ar":
+            translated = translate_title(article.title)
         msg = format_message(article, cfg, translated)
         if tg.send_text(msg):
             state.mark(article)
