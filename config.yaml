@@ -1,0 +1,306 @@
+max_messages_per_run: 20
+max_per_language: 2
+include_other_tier: true
+strict_title_filter: true
+total_time_budget_sec: 1000
+translate_titles: true
+
+gdelt:
+  enabled: true
+  timespan: "3h"
+  maxrecords: 60
+  query_terms: '("Saudi Arabia" OR Riyadh OR Aramco OR NEOM OR "bin Salman")'
+  languages: [english, arabic, french, german, spanish, russian, chinese, japanese, korean, turkish, persian, urdu, hindi, indonesian, portuguese, italian, hebrew, thai, vietnamese, malay, bengali, tamil, polish, dutch, ukrainian, greek, swedish, czech, romanian, hungarian, bulgarian, serbian, kazakh, uzbek, swahili, amharic, somali, hausa, nepali, norwegian, danish, finnish]
+
+google_news:
+  enabled: true
+  when: "3h"
+  editions:
+    - {lang: en, hl: "en-US", gl: "US", ceid: "US:en", country_ar: "أمريكا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-GB", gl: "GB", ceid: "GB:en", country_ar: "بريطانيا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: ar, hl: "ar", gl: "SA", ceid: "SA:ar", country_ar: "السعودية", query: 'السعودية'}
+    - {lang: fr, hl: "fr", gl: "FR", ceid: "FR:fr", country_ar: "فرنسا", query: '"Arabie saoudite"'}
+    - {lang: de, hl: "de", gl: "DE", ceid: "DE:de", country_ar: "ألمانيا", query: '"Saudi-Arabien"'}
+    - {lang: es, hl: "es", gl: "ES", ceid: "ES:es", country_ar: "إسبانيا", query: '"Arabia Saudita"'}
+    - {lang: ru, hl: "ru", gl: "RU", ceid: "RU:ru", country_ar: "روسيا", query: '"Саудовская Аравия"'}
+    - {lang: zh, hl: "zh-CN", gl: "CN", ceid: "CN:zh-Hans", country_ar: "الصين", query: '沙特阿拉伯'}
+    - {lang: ja, hl: "ja", gl: "JP", ceid: "JP:ja", country_ar: "اليابان", query: 'サウジアラビア'}
+    - {lang: ko, hl: "ko", gl: "KR", ceid: "KR:ko", country_ar: "كوريا الجنوبية", query: '사우디아라비아'}
+    - {lang: tr, hl: "tr", gl: "TR", ceid: "TR:tr", country_ar: "تركيا", query: '"Suudi Arabistan"'}
+    - {lang: pt, hl: "pt-BR", gl: "BR", ceid: "BR:pt-419", country_ar: "البرازيل", query: '"Arábia Saudita"'}
+    - {lang: it, hl: "it", gl: "IT", ceid: "IT:it", country_ar: "إيطاليا", query: '"Arabia Saudita"'}
+    - {lang: hi, hl: "hi", gl: "IN", ceid: "IN:hi", country_ar: "الهند", query: 'सऊदी अरब'}
+    - {lang: id, hl: "id", gl: "ID", ceid: "ID:id", country_ar: "إندونيسيا", query: '"Arab Saudi"'}
+    - {lang: en, hl: "en-CA", gl: "CA", ceid: "CA:en", country_ar: "كندا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: fr, hl: "fr-CA", gl: "CA", ceid: "CA:fr", country_ar: "كندا (فرنسي)", query: '"Arabie saoudite"'}
+    - {lang: en, hl: "en-AU", gl: "AU", ceid: "AU:en", country_ar: "أستراليا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-NZ", gl: "NZ", ceid: "NZ:en", country_ar: "نيوزيلندا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-IN", gl: "IN", ceid: "IN:en", country_ar: "الهند", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-SG", gl: "SG", ceid: "SG:en", country_ar: "سنغافورة", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-PH", gl: "PH", ceid: "PH:en", country_ar: "الفلبين", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-MY", gl: "MY", ceid: "MY:en", country_ar: "ماليزيا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-PK", gl: "PK", ceid: "PK:en", country_ar: "باكستان", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-ZA", gl: "ZA", ceid: "ZA:en", country_ar: "جنوب أفريقيا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-NG", gl: "NG", ceid: "NG:en", country_ar: "نيجيريا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-KE", gl: "KE", ceid: "KE:en", country_ar: "كينيا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-GH", gl: "GH", ceid: "GH:en", country_ar: "غانا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: en, hl: "en-IE", gl: "IE", ceid: "IE:en", country_ar: "أيرلندا", query: '"Saudi Arabia" OR Riyadh'}
+    - {lang: fr, hl: "fr", gl: "SN", ceid: "SN:fr", country_ar: "السنغال", query: '"Arabie saoudite"'}
+    - {lang: fr, hl: "fr", gl: "MA", ceid: "MA:fr", country_ar: "المغرب", query: '"Arabie saoudite"'}
+    - {lang: fr, hl: "fr", gl: "CI", ceid: "CI:fr", country_ar: "ساحل العاج", query: '"Arabie saoudite"'}
+    - {lang: fr, hl: "fr", gl: "BE", ceid: "BE:fr", country_ar: "بلجيكا", query: '"Arabie saoudite"'}
+    - {lang: es, hl: "es-419", gl: "MX", ceid: "MX:es-419", country_ar: "المكسيك", query: '"Arabia Saudita"'}
+    - {lang: es, hl: "es-419", gl: "AR", ceid: "AR:es-419", country_ar: "الأرجنتين", query: '"Arabia Saudita"'}
+    - {lang: es, hl: "es-419", gl: "CO", ceid: "CO:es-419", country_ar: "كولومبيا", query: '"Arabia Saudita"'}
+    - {lang: es, hl: "es-419", gl: "CL", ceid: "CL:es-419", country_ar: "تشيلي", query: '"Arabia Saudita"'}
+    - {lang: ar, hl: "ar", gl: "EG", ceid: "EG:ar", country_ar: "مصر", query: 'السعودية'}
+    - {lang: ar, hl: "ar", gl: "AE", ceid: "AE:ar", country_ar: "الإمارات", query: 'السعودية'}
+    - {lang: ar, hl: "ar", gl: "MA", ceid: "MA:ar", country_ar: "المغرب", query: 'السعودية'}
+    - {lang: sw, hl: "sw", gl: "KE", ceid: "KE:sw", country_ar: "كينيا", query: '"Saudi Arabia"'}
+    - {lang: am, hl: "am", gl: "ET", ceid: "ET:am", country_ar: "إثيوبيا", query: 'ሳዑዲ አረቢያ'}
+    - {lang: th, hl: "th", gl: "TH", ceid: "TH:th", country_ar: "تايلاند", query: 'ซาอุดีอาระเบีย'}
+    - {lang: vi, hl: "vi", gl: "VN", ceid: "VN:vi", country_ar: "فيتنام", query: '"Ả Rập Xê Út"'}
+    - {lang: ms, hl: "ms", gl: "MY", ceid: "MY:ms", country_ar: "ماليزيا", query: '"Arab Saudi"'}
+    - {lang: bn, hl: "bn", gl: "BD", ceid: "BD:bn", country_ar: "بنغلاديش", query: 'সৌদি আরব'}
+    - {lang: ur, hl: "ur", gl: "PK", ceid: "PK:ur", country_ar: "باكستان", query: 'سعودی عرب'}
+    - {lang: ta, hl: "ta", gl: "IN", ceid: "IN:ta", country_ar: "الهند (التاميل)", query: 'சவுதி அரேபியா'}
+    - {lang: zh, hl: "zh-TW", gl: "TW", ceid: "TW:zh-Hant", country_ar: "تايوان", query: '沙烏地阿拉伯'}
+    - {lang: zh, hl: "zh-HK", gl: "HK", ceid: "HK:zh-Hant", country_ar: "هونغ كونغ", query: '沙特阿拉伯'}
+    - {lang: pl, hl: "pl", gl: "PL", ceid: "PL:pl", country_ar: "بولندا", query: '"Arabia Saudyjska"'}
+    - {lang: nl, hl: "nl", gl: "NL", ceid: "NL:nl", country_ar: "هولندا", query: '"Saoedi-Arabië"'}
+    - {lang: uk, hl: "uk", gl: "UA", ceid: "UA:uk", country_ar: "أوكرانيا", query: '"Саудівська Аравія"'}
+    - {lang: el, hl: "el", gl: "GR", ceid: "GR:el", country_ar: "اليونان", query: '"Σαουδική Αραβία"'}
+    - {lang: sv, hl: "sv", gl: "SE", ceid: "SE:sv", country_ar: "السويد", query: 'Saudiarabien'}
+    - {lang: cs, hl: "cs", gl: "CZ", ceid: "CZ:cs", country_ar: "التشيك", query: '"Saúdská Arábie"'}
+    - {lang: ro, hl: "ro", gl: "RO", ceid: "RO:ro", country_ar: "رومانيا", query: '"Arabia Saudită"'}
+    - {lang: hu, hl: "hu", gl: "HU", ceid: "HU:hu", country_ar: "المجر", query: 'Szaúd-Arábia'}
+    - {lang: bg, hl: "bg", gl: "BG", ceid: "BG:bg", country_ar: "بلغاريا", query: '"Саудитска Арабия"'}
+    - {lang: sr, hl: "sr", gl: "RS", ceid: "RS:sr", country_ar: "صربيا", query: '"Саудијска Арабија"'}
+    - {lang: no, hl: "no", gl: "NO", ceid: "NO:no", country_ar: "النرويج", query: 'Saudi-Arabia'}
+    - {lang: da, hl: "da", gl: "DK", ceid: "DK:da", country_ar: "الدنمارك", query: 'Saudi-Arabien'}
+    - {lang: fi, hl: "fi", gl: "FI", ceid: "FI:fi", country_ar: "فنلندا", query: 'Saudi-Arabia'}
+    - {lang: he, hl: "he", gl: "IL", ceid: "IL:he", country_ar: "إسرائيل", query: 'סעודיה'}
+    - {lang: pt, hl: "pt-PT", gl: "PT", ceid: "PT:pt-150", country_ar: "البرتغال", query: '"Arábia Saudita"'}
+    - {lang: de, hl: "de", gl: "AT", ceid: "AT:de", country_ar: "النمسا", query: '"Saudi-Arabien"'}
+    - {lang: de, hl: "de", gl: "CH", ceid: "CH:de", country_ar: "سويسرا", query: '"Saudi-Arabien"'}
+
+tiers:
+  intl:
+    label: "🟢 مصدر دولي كبير"
+    domains: [apnews.com, bbc.com, bbc.co.uk, theguardian.com, nytimes.com, ft.com, bloomberg.com, reuters.com,
+              wsj.com, washingtonpost.com, economist.com, cnn.com, cnbc.com, forbes.com, axios.com, politico.com,
+              dw.com, france24.com, rfi.fr, lemonde.fr, lefigaro.fr, spiegel.de, zeit.de, faz.net, elpais.com,
+              aljazeera.com, aljazeera.net, nikkei.com, nhk.or.jp, japantimes.co.jp, scmp.com, koreaherald.com,
+              straitstimes.com, thehindu.com, hindustantimes.com, indianexpress.com, dawn.com, thejakartapost.com,
+              timesofisrael.com, haaretz.com, ansa.it, corriere.it, lastampa.it, folha.uol.com.br, estadao.com.br,
+              kompas.com, tempo.co]
+  saudi_arab:
+    label: "🔵 مصدر سعودي / عربي"
+    domains: [spa.gov.sa, arabnews.com, saudigazette.com.sa, alarabiya.net, aawsat.com, okaz.com.sa, alwatan.com.sa,
+              alriyadh.com, aljazirah.com.sa, argaam.com, zawya.com, almadina.com, sabq.org, alekhbariya.net,
+              asharqbusiness.com, skynewsarabia.com, thenationalnews.com, gulfnews.com, khaleejtimes.com,
+              arabianbusiness.com, alyaum.com, aleqt.com, mubasher.info, al-ain.com, emaratalyoum.com]
+  state:
+    label: "🟡 إعلام حكومي أجنبي"
+    domains: [xinhuanet.com, cgtn.com, chinadaily.com.cn, globaltimes.cn, tass.com, tass.ru, ria.ru, rt.com,
+              sputnikglobe.com, presstv.ir, tehrantimes.com, irna.ir, aa.com.tr, trtworld.com, trthaber.com, yna.co.kr]
+  other:
+    label: "⚪ مصدر آخر"
+
+title_must_match_any:
+  - saudi
+  - riyadh
+  - riyad
+  - jeddah
+  - makkah
+  - aramco
+  - neom
+  - bin salman
+  - hajj
+  - umrah
+  - vision 2030
+  - alula
+  - public investment fund
+  - saoudi
+  - arabie saoudite
+  - arabia saud
+  - саудов
+  - саудит
+  - эр-рияд
+  - 沙特
+  - 利雅得
+  - サウジ
+  - リヤド
+  - 사우디
+  - 리야드
+  - suudi
+  - عربستان
+  - سعودی
+  - सऊदी
+  - रियाद
+  - arab saudi
+  - arábia saudita
+  - סעודיה
+  - סעודית
+  - ריאד
+  - السعود
+  - أرامكو
+  - نيوم
+  - بن سلمان
+  - رؤية 2030
+  - =رياض
+  - =جدة
+  - =مكة
+  - =حج
+  - =عمرة
+  - =ریاض
+  - ซาอุ
+  - ả rập xê út
+  - ả-rập xê-út
+  - সৌদি
+  - சவூதி
+  - சவுதி
+  - సౌదీ
+  - साउदी
+  - saudyjsk
+  - saoedi
+  - saudiarab
+  - саудівськ
+  - саудијск
+  - сауд
+  - σαουδ
+  - saúdsk
+  - szaúd
+  - arabia saudit
+  - sacuudi
+  - saudiyya
+  - ሳዑዲ
+  - սաուդ
+  - საუდ
+  - saudí
+  - ksa
+
+languages_ar:
+  ar: "العربية"
+  en: "الإنجليزية"
+  fr: "الفرنسية"
+  de: "الألمانية"
+  es: "الإسبانية"
+  ru: "الروسية"
+  zh: "الصينية"
+  ja: "اليابانية"
+  ko: "الكورية"
+  tr: "التركية"
+  fa: "الفارسية"
+  ur: "الأردية"
+  hi: "الهندية"
+  id: "الإندونيسية"
+  pt: "البرتغالية"
+  it: "الإيطالية"
+  he: "العبرية"
+  th: "التايلاندية"
+  vi: "الفيتنامية"
+  ms: "الملايوية"
+  bn: "البنغالية"
+  ta: "التاميلية"
+  pl: "البولندية"
+  nl: "الهولندية"
+  uk: "الأوكرانية"
+  el: "اليونانية"
+  sv: "السويدية"
+  cs: "التشيكية"
+  ro: "الرومانية"
+  hu: "المجرية"
+  bg: "البلغارية"
+  sr: "الصربية"
+  kk: "الكازاخية"
+  uz: "الأوزبكية"
+  sw: "السواحيلية"
+  am: "الأمهرية"
+  so: "الصومالية"
+  ha: "الهوسا"
+  ne: "النيبالية"
+  no: "النرويجية"
+  da: "الدنماركية"
+  fi: "الفنلندية"
+
+countries_ar:
+  "united states": "أمريكا"
+  "united kingdom": "بريطانيا"
+  "france": "فرنسا"
+  "germany": "ألمانيا"
+  "spain": "إسبانيا"
+  "italy": "إيطاليا"
+  "russia": "روسيا"
+  "china": "الصين"
+  "japan": "اليابان"
+  "south korea": "كوريا الجنوبية"
+  "turkey": "تركيا"
+  "iran": "إيران"
+  "pakistan": "باكستان"
+  "india": "الهند"
+  "indonesia": "إندونيسيا"
+  "brazil": "البرازيل"
+  "saudi arabia": "السعودية"
+  "united arab emirates": "الإمارات"
+  "qatar": "قطر"
+  "egypt": "مصر"
+  "israel": "إسرائيل"
+  "canada": "كندا"
+  "australia": "أستراليا"
+  "kuwait": "الكويت"
+  "bahrain": "البحرين"
+  "oman": "عُمان"
+  "jordan": "الأردن"
+  "lebanon": "لبنان"
+  "iraq": "العراق"
+  "malaysia": "ماليزيا"
+  "singapore": "سنغافورة"
+  "portugal": "البرتغال"
+  "switzerland": "سويسرا"
+  "netherlands": "هولندا"
+  "thailand": "تايلاند"
+  "vietnam": "فيتنام"
+  "poland": "بولندا"
+  "ukraine": "أوكرانيا"
+  "greece": "اليونان"
+  "sweden": "السويد"
+  "norway": "النرويج"
+  "denmark": "الدنمارك"
+  "finland": "فنلندا"
+  "czechia": "التشيك"
+  "czech republic": "التشيك"
+  "romania": "رومانيا"
+  "hungary": "المجر"
+  "bulgaria": "بلغاريا"
+  "serbia": "صربيا"
+  "kazakhstan": "كازاخستان"
+  "uzbekistan": "أوزبكستان"
+  "kenya": "كينيا"
+  "nigeria": "نيجيريا"
+  "south africa": "جنوب أفريقيا"
+  "ethiopia": "إثيوبيا"
+  "somalia": "الصومال"
+  "ghana": "غانا"
+  "senegal": "السنغال"
+  "morocco": "المغرب"
+  "algeria": "الجزائر"
+  "tunisia": "تونس"
+  "bangladesh": "بنغلاديش"
+  "nepal": "نيبال"
+  "mexico": "المكسيك"
+  "argentina": "الأرجنتين"
+  "colombia": "كولومبيا"
+  "chile": "تشيلي"
+  "new zealand": "نيوزيلندا"
+  "ireland": "أيرلندا"
+  "belgium": "بلجيكا"
+  "austria": "النمسا"
+  "philippines": "الفلبين"
+  "taiwan": "تايوان"
+  "hong kong": "هونغ كونغ"
+  "ivory coast": "ساحل العاج"
+  "tanzania": "تنزانيا"
+  "uganda": "أوغندا"
+  "sudan": "السودان"
+  "libya": "ليبيا"
