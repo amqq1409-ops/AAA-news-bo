@@ -141,6 +141,15 @@ def country_flag(country_code: str) -> str:
     return "".join(chr(ord(char) + 127397) for char in code)
 
 
+def published_utc(article: Article):
+    published = article.published
+    if published is None:
+        return None
+    if published.tzinfo is None:
+        return published.replace(tzinfo=dt.timezone.utc)
+    return published.astimezone(dt.timezone.utc)
+
+
 def h(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()[:16]
 
@@ -356,7 +365,8 @@ def fetch_gnews(cfg, deadline):
     for ed in editions:
         if time.monotonic() > deadline:
             break
-        q = ed.get("query", '"Saudi Arabia"')
+        query = ed.get("query", '"Saudi Arabia"')
+        q = f'({query}) when:{gn.get("when", "3h")}'
         url = f'https://news.google.com/rss/search?q={quote_plus(q)}&hl={ed.get("hl", "en-US")}&gl={ed.get("gl", "US")}&ceid={quote_plus(ed.get("ceid", "US:en"))}'
         r = http_get(url)
         if r is None or r.status_code != 200:
@@ -453,10 +463,12 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     lines.append(title_line)
     lines.append(f"📌 <b>{topic}</b> • {getattr(article, 'breaking_score', article.relevance_score)} نقطة • {label}")
     lines.append(f"🏛 {html.escape(source)}")
-    if article.country_ar:
-        flag = country_flag(getattr(article, "country_code", ""))
+    country_code = getattr(article, "country_code", "") or source_country_code(article.country_ar)
+    flag = country_flag(country_code)
+    if article.country_ar or flag:
         country_label = f"{flag} " if flag else ""
-        lines.append(f"🌐 {country_label}{html.escape(article.country_ar)}")
+        country_name = article.country_ar or country_code
+        lines.append(f"🌐 {country_label}{html.escape(country_name)}")
     if article.published:
         lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
     lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
@@ -483,7 +495,19 @@ def select_articles(articles, cfg, state):
     pats = compile_terms(cfg.get("title_must_match_any", []))
     selected = []
     seen = set()
+    now = dt.datetime.now(dt.timezone.utc)
+    max_age_hours = max(0, float(cfg.get("max_article_age_hours", 3)))
+    freshest = []
     for article in articles:
+        published = published_utc(article)
+        if published is None:
+            continue
+        age = now - published
+        if age > dt.timedelta(hours=max_age_hours) or age < dt.timedelta(minutes=-5):
+            continue
+        freshest.append((published, article))
+    freshest.sort(key=lambda item: item[0], reverse=True)
+    for _, article in freshest:
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
@@ -501,7 +525,11 @@ def select_articles(articles, cfg, state):
             if not any(k.lower() in article.title.lower() for k in ["saudi", "riyadh", "السعودية", "الرياض", "أرامكو", "نيوم", "رؤية 2030", "بن سلمان"]):
                 continue
         selected.append(article)
-    selected.sort(key=lambda a: (-(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
+    selected.sort(key=lambda a: (
+        -published_utc(a).timestamp(),
+        -(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score),
+        -a.source_score,
+    ))
     max_per_lang = cfg.get("breaking_per_language", 2) if cfg.get("breaking_mode") else cfg.get("max_per_language", 2)
     out, counts = [], {}
     for a in selected:

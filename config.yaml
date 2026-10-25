@@ -1,5 +1,6 @@
 max_messages_per_run: 20
 max_per_language: 2
+max_article_age_hours: 3
 include_other_tier: true
 strict_title_filter: true
 total_time_budget_sec: 1000
