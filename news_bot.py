@@ -198,6 +198,30 @@ def http_get(url: str, timeout: int = 20, **kwargs):
         return None
 
 
+def translate_title(title: str):
+    url = "https://translate.googleapis.com/translate_a/single"
+    params = {"client": "gtx", "sl": "auto", "tl": "ar", "dt": "t", "q": title[:250]}
+    for attempt in range(2):
+        response = http_get(url, timeout=12, params=params)
+        try:
+            if response is not None and response.status_code == 200:
+                payload = response.json()
+                segments = payload[0] if isinstance(payload, list) and payload else []
+                translated = "".join(
+                    segment[0]
+                    for segment in segments
+                    if isinstance(segment, list) and segment and isinstance(segment[0], str)
+                ).strip()
+                if translated:
+                    return translated
+        except (IndexError, TypeError, ValueError):
+            pass
+        if attempt == 0:
+            time.sleep(1)
+    logging.warning("Could not translate title to Arabic")
+    return None
+
+
 def parse_gdelt_items(items, cfg):
     out = []
     for it in items or []:
@@ -477,14 +501,8 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
         if store is not None:
             store.upsert_article(article)
         translated = None
-        if article.lang != "ar":
-            tr = http_get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=" + quote_plus(article.title[:250]), timeout=12)
-            try:
-                if tr is not None and tr.status_code == 200:
-                    payload = tr.json()
-                    translated = "".join(seg[0] for seg in payload[0] if seg and seg[0])
-            except Exception:
-                translated = None
+        if cfg.get("translate_titles", True) and article.lang != "ar":
+            translated = translate_title(article.title)
         msg = format_message(article, cfg, translated)
         if tg.send_text(msg):
             state.mark(article)
