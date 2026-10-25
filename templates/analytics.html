@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>التحليلات التفصيلية</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header><h1>📈 التحليلات التفصيلية</h1><nav><a href="/dashboard">لوحة التحكم</a><a href="/map">الدول</a><a href="/search">البحث</a></nav></header>
+  <main><p id="status" role="status">جارٍ تحميل البيانات…</p>
+    <div class="columns"><section class="panel"><h2>الاتجاه اليومي</h2><div id="trends"></div></section>
+      <section class="panel"><h2>أداء المصادر (التقييم)</h2><div id="sources"></div></section>
+      <section class="panel"><h2>المشاعر حسب الموضوع</h2><div id="topics-sentiment"></div></section>
+    </div>
+  </main>
+  <script src="/static/js/analytics.js" defer></script>
+</body>
+</html>
