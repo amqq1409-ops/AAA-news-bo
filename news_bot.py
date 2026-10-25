@@ -18,6 +18,7 @@ import requests
 import yaml
 
 from data_store import ArticleStore
+from nlp_processor import NLPProcessor, TOPIC_KEYWORDS, classify_topic as classify_topic_text
 
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
@@ -36,19 +37,6 @@ GDELT_LANG_CODES = {
     "finnish": "fi",
 }
 TRACKING = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ref", "cmpid"}
-TOPIC_KEYWORDS = {
-    "politics": ["سياسة", "دبلوماسية", "وزير", "رئيس", "مفاوضات", "تعاون", "أمن", "خارجية", "مبادرة"],
-    "economy": ["اقتصاد", "استثمار", "سوق", "أسهم", "عملة", "تمويل", "صادرات", "ميزانية", "أرامكو", "pif", "الاستثمار"],
-    "energy": ["طاقة", "نفط", "غاز", "أرامكو", "الطاقة", "oil", "gas", "energy"],
-    "tourism": ["سياحة", "السياحة", "tourism", "travel", "مقصد", "زيارة"],
-    "sports": ["كرة قدم", "رياضة", "مشجع", "دوري", "مباراة", "league", "sport", "football"],
-    "technology": ["تقنية", "ذكاء", "AI", "تكنولوجيا", "software", "tech", "ابتكار", "digital"],
-    "culture": ["ثقافة", "فن", "سينما", "فنون", "مهرجان", "ثقافي", "art"],
-    "religion": ["حج", "عمرة", "إسلام", "مكة", "جدة", "مقدسات", "hajj", "umrah"],
-    "real_estate": ["عقار", "مشاريع", "تطوير", "عقارات", "مدينة", "project", "real estate"],
-    "regional": ["الخليج", "الدول", "المنطقة", "تعاون", "شراكات", "إقليمي"],
-    "security": ["أمن", "مخابرات", "دفاع", "حظر", "تدابير", "security"],
-}
 BREAKING_KEYWORDS = [
     "saudi", "riyadh", "jeddah", "neom", "aramco", "pif", "vision 2030",
     "الرياض", "السعودية", "نيوم", "أرامكو", "رؤية 2030", "مكة", "جدة",
@@ -67,8 +55,9 @@ SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.c
 
 
 class Article:
-    def __init__(self, title, url, domain, source_name, lang, country_ar, published, origin, direct=False):
+    def __init__(self, title, url, domain, source_name, lang, country_ar, published, origin, direct=False, text=None):
         self.title = title.strip()
+        self.text = (text or self.title).strip()
         self.url = canonical_url(url)
         self.domain = domain.lower()
         self.source_name = source_name or self.domain or "News"
@@ -83,6 +72,11 @@ class Article:
         self.source_score = source_priority(self.domain)
         self.relevance_score = 0
         self.breaking_score = 0
+        self.countries = []
+        self.entities = []
+        self.languages = [self.lang]
+        self.confidence_score = 0.0
+        self.topic_confidence = 0.0
 
 
 def canonical_url(url: str) -> str:
@@ -119,11 +113,7 @@ def source_priority(domain: str) -> int:
 
 
 def classify_topic(title: str) -> str:
-    text = title.lower()
-    for topic, keywords in TOPIC_KEYWORDS.items():
-        if any(k.lower() in text for k in keywords):
-            return topic
-    return "general"
+    return classify_topic_text(title)
 
 
 def compile_terms(terms):
@@ -153,6 +143,10 @@ def compute_relevance(article: Article, cfg: dict) -> int:
         score += 45
     if any(k.lower() in text for k in ["saudi", "riyadh", "jeddah", "makkah", "ramco", "aramco", "neom", "vision 2030", "السعودية", "الرياض", "أرامكو", "نيوم", "بن سلمان", "رؤية 2030"]):
         score += 18
+    confidence = getattr(article, "confidence_score", 0.0)
+    score += round(max(0.0, min(float(confidence or 0.0), 1.0)) * 25)
+    if any(country.get("code") == "SA" for country in getattr(article, "countries", [])):
+        score += 15
     score += article.source_score // 10
     score += 8 if article.tier in {"intl", "saudi_arab"} else 0
     score += 5 if article.lang in {"ar", "en"} else 0
@@ -214,7 +208,12 @@ def parse_gdelt_items(items, cfg):
         except Exception:
             pass
         domain = (it.get("domain") or host_of(url)).lower()
-        article = Article(title, url, domain, domain, lang, it.get("sourcecountry", ""), pub, "gdelt", True)
+        snippet = str(it.get("snippet") or it.get("description") or "")
+        snippet = html.unescape(re.sub(r"<[^>]+>", " ", snippet))
+        article = Article(
+            title, url, domain, domain, lang, it.get("sourcecountry", ""), pub, "gdelt", True,
+            " ".join((title + " " + snippet[:3000]).split()),
+        )
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
@@ -262,6 +261,9 @@ def parse_gnews_rss(xml_bytes, edition):
             continue
         src = item.find("source")
         source_name = (src.text or "").strip() if src is not None and src is not None else ""
+        description = item.findtext("description") or ""
+        description = html.unescape(re.sub(r"<[^>]+>", " ", description))
+        text = " ".join((title + " " + description[:3000]).split())
         pub = None
         try:
             pub = email.utils.parsedate_to_datetime(item.findtext("pubDate") or "")
@@ -270,7 +272,10 @@ def parse_gnews_rss(xml_bytes, edition):
         except Exception:
             pub = None
         domain = host_of(link) or (src.get("url", "") if src is not None else "")
-        article = Article(title, link, domain, source_name or domain or "Google News", edition.get("lang", "en"), edition.get("country_ar", ""), pub, "gnews", False)
+        article = Article(
+            title, link, domain, source_name or domain or "Google News",
+            edition.get("lang", "en"), edition.get("country_ar", ""), pub, "gnews", False, text,
+        )
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, edition)
         article.breaking_score = breaking_score(article)
@@ -410,16 +415,29 @@ def apply_saudi_focus(cfg: dict) -> dict:
     return cfg
 
 
-def select_articles(articles, cfg, state):
+def select_articles(articles, cfg, state, nlp_processor=None):
+    nlp_processor = nlp_processor or NLPProcessor()
     pats = compile_terms(cfg.get("title_must_match_any", []))
     selected = []
     seen = set()
     for article in articles:
-        article.topic = classify_topic(article.title)
+        analysis = nlp_processor.analyze(
+            article.text,
+            article.lang,
+            cfg.get("saudi_focus_terms", []),
+        )
+        article.topic = analysis["topic"]
+        article.topic_confidence = analysis["topic_confidence"]
+        article.countries = analysis["countries"]
+        article.entities = analysis["entities"]
+        article.languages = analysis["languages"]
+        article.lang = analysis["language"]
+        article.confidence_score = analysis["confidence_score"]
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
         assign_tier(article, cfg)
-        if cfg.get("strict_title_filter", True) and not title_matches(article.title, pats):
+        nlp_relevant = article.confidence_score >= cfg.get("nlp_relevance_threshold", 0.65)
+        if cfg.get("strict_title_filter", True) and not title_matches(article.title, pats) and not nlp_relevant:
             continue
         article.uid = "u" + h(article.url)
         dedupe1 = "d" + h(norm_title(article.title)[:180])
@@ -429,7 +447,10 @@ def select_articles(articles, cfg, state):
         seen.add(dedupe1)
         if cfg.get("saudi_focus", False) and article.breaking_score < cfg.get("breaking_threshold", 78):
             # keep only high-score items in Saudi-focus mode
-            if not any(k.lower() in article.title.lower() for k in ["saudi", "riyadh", "السعودية", "الرياض", "أرامكو", "نيوم", "رؤية 2030", "بن سلمان"]):
+            if (
+                article.confidence_score < cfg.get("nlp_relevance_threshold", 0.65)
+                and not any(k.lower() in article.title.lower() for k in ["saudi", "riyadh", "السعودية", "الرياض", "أرامكو", "نيوم", "رؤية 2030", "بن سلمان"])
+            ):
                 continue
         selected.append(article)
     selected.sort(key=lambda a: (-(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
