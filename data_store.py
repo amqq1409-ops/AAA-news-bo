@@ -133,6 +133,9 @@ class ArticleStore:
     def get_stats_summary(self, hours: int = 24) -> Dict[str, Any]:
         with self._connect() as conn:
             total = conn.execute("SELECT COUNT(*) AS c FROM articles").fetchone()["c"]
+            languages_covered = conn.execute(
+                "SELECT COUNT(DISTINCT lang) AS c FROM articles WHERE lang IS NOT NULL AND trim(lang) != ''"
+            ).fetchone()["c"]
             recent = conn.execute(
                 "SELECT COUNT(*) AS c FROM articles WHERE published_at IS NOT NULL AND datetime(published_at) >= datetime('now', ?) ",
                 (f'-{hours} hours',),
@@ -153,6 +156,7 @@ class ArticleStore:
 
         return {
             "total_articles": total,
+            "languages_covered": languages_covered,
             "recent_articles": recent,
             "sent_last_period": sent_count,
             "by_lang": [{"label": row["lang"], "count": row["c"]} for row in by_lang],
@@ -160,6 +164,116 @@ class ArticleStore:
             "by_source": [{"label": row["source_name"], "count": row["c"]} for row in by_source],
             "cutoff_hours": hours,
         }
+
+    def get_country_distribution(self) -> list[Dict[str, Any]]:
+        return self.get_distribution("country")
+
+    def get_topic_distribution(self) -> list[Dict[str, Any]]:
+        return self.get_distribution("topic")
+
+    def get_language_distribution(self) -> list[Dict[str, Any]]:
+        return self.get_distribution("language")
+
+    def get_distribution(self, dimension: str) -> list[Dict[str, Any]]:
+        columns = {"country": "country_ar", "topic": "topic", "language": "lang"}
+        column = columns.get(dimension)
+        if column is None:
+            raise ValueError("unsupported article distribution")
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {column} AS label, COUNT(*) AS count
+                FROM articles
+                WHERE {column} IS NOT NULL AND trim({column}) != ''
+                GROUP BY {column}
+                ORDER BY count DESC, label
+                """
+            ).fetchall()
+        return [{"label": row["label"], "count": row["count"]} for row in rows]
+
+    def get_source_performance(self) -> list[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_name AS label, COUNT(*) AS count,
+                       ROUND(AVG(source_score), 1) AS average_score
+                FROM articles
+                WHERE source_name IS NOT NULL AND trim(source_name) != ''
+                GROUP BY source_name
+                ORDER BY count DESC, label
+                """
+            ).fetchall()
+        return [
+            {"label": row["label"], "count": row["count"], "average_score": row["average_score"]}
+            for row in rows
+        ]
+
+    def get_daily_trends(self, days: int = 30, period: str = "daily") -> list[Dict[str, Any]]:
+        days = max(1, min(int(days), 365))
+        date_expression = {
+            "daily": "date(published_at)",
+            "weekly": "strftime('%Y-W%W', published_at)",
+            "monthly": "strftime('%Y-%m', published_at)",
+        }.get(period)
+        if date_expression is None:
+            raise ValueError("period must be daily, weekly, or monthly")
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {date_expression} AS date, COUNT(*) AS count
+                FROM articles
+                WHERE published_at IS NOT NULL
+                  AND datetime(published_at) >= datetime('now', ?)
+                GROUP BY date
+                ORDER BY date
+                """,
+                (f"-{days} days",),
+            ).fetchall()
+        return [{"date": row["date"], "count": row["count"]} for row in rows]
+
+    def search_articles(self, filters: Dict[str, Any] | None = None) -> list[Dict[str, Any]]:
+        filters = filters or {}
+        clauses = []
+        values = []
+        for parameter, column in (
+            ("country", "country_ar"),
+            ("language", "lang"),
+            ("topic", "topic"),
+            ("source", "source_name"),
+        ):
+            value = filters.get(parameter)
+            if value:
+                clauses.append(f"{column} = ?")
+                values.append(value)
+        start_date = filters.get("start_date")
+        if start_date:
+            clauses.append("date(published_at) >= date(?)")
+            values.append(start_date)
+        end_date = filters.get("end_date")
+        if end_date:
+            clauses.append("date(published_at) <= date(?)")
+            values.append(end_date)
+        min_source_score = filters.get("min_source_score")
+        if min_source_score is not None:
+            clauses.append("source_score >= ?")
+            values.append(min_source_score)
+        query = filters.get("q")
+        if query:
+            clauses.append(
+                "(title LIKE ? ESCAPE '\\' OR source_name LIKE ? ESCAPE '\\' "
+                "OR domain LIKE ? ESCAPE '\\')"
+            )
+            escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped_query}%"
+            values.extend((pattern, pattern, pattern))
+
+        sql = "SELECT * FROM articles"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY datetime(published_at) DESC, id DESC"
+        with self._connect() as conn:
+            rows = conn.execute(sql, values).fetchall()
+        return [dict(row) for row in rows]
 
     def stats_text(self, hours: int = 24) -> str:
         stats = self.get_stats_summary(hours=hours)

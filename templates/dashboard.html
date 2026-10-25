@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>لوحة التحكم</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header><h1>📊 لوحة التحكم</h1><nav><a href="/">الرئيسية</a><a href="/map">الدول</a><a href="/analytics">التحليلات</a><a href="/search">البحث</a></nav></header>
+  <main>
+    <p id="status" role="status">جارٍ تحميل البيانات…</p>
+    <section id="stats" class="cards"></section>
+    <div class="columns">
+      <section class="panel"><h2>😊 المشاعر العامة</h2><div id="sentiment"></div></section>
+      <section class="panel"><h2>🔝 الموضوعات</h2><div id="topics"></div></section>
+    </div>
+  </main>
+  <script src="/static/js/dashboard.js" defer></script>
+</body>
+</html>
