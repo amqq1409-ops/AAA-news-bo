@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-# مراقب أخبار السعودية — نسخة محسنة + قاعدة بيانات + إحصاءات التشغيل
-# GDELT + Google News + فلترة ذكية + تقييم جودة المصدر + ترتيب حسب الأهمية + تحجيم التكرار
+# مراقب أخبار السعودية — ملف واحد. الإعدادات في config.yaml
+# GDELT + Google News (لغات متعددة) -> تنقية -> تلقرام. وضع --fast للفحص السريع
+# وضع --breaking: تنبيه فوري للأخبار المهمة جدًا في الوقت الحقيقي
 
 import argparse
 import datetime as dt
@@ -16,20 +17,17 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import requests
 import yaml
 
-from data_store import ArticleStore
-
 log = logging.getLogger("newsbot")
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
-DB_PATH = ROOT / "data" / "news.db"
 RIYADH = dt.timezone(dt.timedelta(hours=3))
-UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/2.3; +https://github.com)"
+UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/2.4; +https://github.com)"
 
 GDELT_LANG_CODES = {
     "english": "en", "arabic": "ar", "french": "fr", "german": "de", "spanish": "es", "russian": "ru",
@@ -56,6 +54,12 @@ TOPIC_KEYWORDS = {
     "regional": ["الخليج", "الدول", "المنطقة", "تعاون", "شراكات", "إقليمي"],
     "security": ["أمن", "مخابرات", "دفاع", "حظر", "تدابير", "security"],
 }
+
+BREAKING_KEYWORDS = [
+    "saudi", "riyadh", "jeddah", "neom", "aramco", "pif", "vision 2030",
+    "الرياض", "السعودية", "نيوم", "أرامكو", "رؤية 2030", "مكة", "جدة",
+    "الاستثمار", "طاقة", "نفط", "توسع", "قرار", "عقود", "توقيع", "مبادرة"
+]
 
 SOURCE_PRIORITY = {
     "reuters.com": 120,
@@ -215,6 +219,26 @@ def compute_relevance(a: Article, cfg: dict) -> int:
     return max(0, score)
 
 
+def breaking_score(a: Article) -> int:
+    score = 0
+    title = (a.title or "").lower()
+    score += min(max(0, a.source_score // 3), 45)
+    score += min(max(0, a.relevance_score), 35)
+    if any(kw.lower() in title for kw in BREAKING_KEYWORDS):
+        score += 25
+    if a.topic in {"economy", "energy", "politics", "security", "real_estate", "religion"}:
+        score += 15
+    if a.tier in {"saudi_arab", "intl", "state"}:
+        score += 10
+    if a.published:
+        age_minutes = (dt.datetime.now(dt.timezone.utc) - a.published.astimezone(dt.timezone.utc)).total_seconds() / 60
+        if age_minutes <= 30:
+            score += 20
+        elif age_minutes <= 120:
+            score += 8
+    return min(score, 100)
+
+
 def fetch_gdelt(cfg: dict, deadline: float) -> tuple[List[Article], Dict[str, int]]:
     g = cfg["gdelt"]
     out: List[Article] = []
@@ -228,7 +252,7 @@ def fetch_gdelt(cfg: dict, deadline: float) -> tuple[List[Article], Dict[str, in
                f'&mode=artlist&format=json&sort=datedesc&maxrecords={g.get("maxrecords", 60)}'
                f'&timespan={g.get("timespan", "3h")}')
         data = None
-        for _ in range(2):
+        for attempt in range(2):
             time.sleep(9)
             r = http_get(url, timeout=30)
             if r is None:
@@ -440,8 +464,10 @@ def select(arts: List[Article], cfg: dict, state: State):
     pats = compile_terms(cfg.get("title_must_match_any", []))
     strict = cfg.get("strict_title_filter", True)
     stats = {"total": len(arts), "relevant": 0, "new": 0}
-    seen_batch: Set[str] = set()
+    seen_batch = set()
     cands: List[Article] = []
+    breaking_mode = cfg.get("breaking_mode", False)
+    breaking_threshold = cfg.get("breaking_threshold", 85)
 
     for a in arts:
         if a.domain:
@@ -449,6 +475,8 @@ def select(arts: List[Article], cfg: dict, state: State):
         a.topic = classify_topic(a.title)
         assign_tier(a, cfg)
         a.relevance_score = compute_relevance(a, cfg) + strong_topic_priority(a.topic)
+        a.breaking_score = breaking_score(a)
+
         if strict and not title_matches(a.title, pats):
             continue
         stats["relevant"] += 1
@@ -467,12 +495,15 @@ def select(arts: List[Article], cfg: dict, state: State):
         if a.tier == "other" and not cfg.get("include_other_tier", True):
             continue
 
+        if breaking_mode:
+            if a.breaking_score < breaking_threshold:
+                continue
         cands.append(a)
 
     stats["new"] = len(cands)
     epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
     cands.sort(key=lambda a: (
-        -(a.relevance_score + (100 if a.tier == "saudi_arab" else 0) + (60 if a.tier == "intl" else 0)),
+        -(a.breaking_score if breaking_mode else a.relevance_score + (100 if a.tier == "saudi_arab" else 0) + (60 if a.tier == "intl" else 0)),
         -((a.published or epoch).timestamp()),
         -a.source_score,
     ))
@@ -480,6 +511,8 @@ def select(arts: List[Article], cfg: dict, state: State):
     per_lang: Dict[str, int] = {}
     chosen: List[Article] = []
     cap_lang = cfg.get("max_per_language", 3)
+    if breaking_mode:
+        cap_lang = cfg.get("breaking_per_language", 2)
     for a in cands:
         if per_lang.get(a.lang, 0) >= cap_lang:
             continue
@@ -513,11 +546,14 @@ def format_message(a: Article, cfg: dict, tr_title: Optional[str] = None) -> str
     tier_label = cfg["tiers"][a.tier]["label"]
     lang_ar = cfg.get("languages_ar", {}).get(a.lang, a.lang)
     topic = topic_label(a.topic)
+    is_breaking = cfg.get("breaking_mode", False) and getattr(a, "breaking_score", 0) >= cfg.get("breaking_threshold", 85)
 
     lines = [f"📰 <b>{e(a.title[:220])}</b>"]
+    if is_breaking:
+        lines = ["🚨 <b>BREAKING NEWS</b>"] + lines
     if tr_title and norm_title(tr_title) != norm_title(a.title):
         lines.append(f"🔁 <i>{e(tr_title[:220])}</i>")
-    lines += ["", f"📌 <b>{topic}</b> • <b>{a.relevance_score}</b> نقطة", tier_label]
+    lines += ["", f"📌 <b>{topic}</b> • <b>{getattr(a, 'breaking_score', a.relevance_score)}</b> نقطة", tier_label]
 
     src = e(a.source_name)
     if a.domain and a.domain != a.source_name:
@@ -528,8 +564,6 @@ def format_message(a: Article, cfg: dict, tr_title: Optional[str] = None) -> str
     lines.append(f"🌐 {where}")
     if a.published:
         lines.append("🕒 " + a.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
-    if a.relevance_score >= 80:
-        lines.append("🚨 خبر مهم جدًا")
     if a.lang != "ar" and a.direct:
         tr = "https://translate.google.com/translate?sl=auto&tl=ar&u=" + quote_plus(a.url)
         lines.append(f'🔤 <a href="{e(tr, quote=True)}">ترجمة الصفحة للعربية</a>')
@@ -569,8 +603,18 @@ class Telegram:
             return False
 
 
-def run(cfg: dict, state: State, tg: Telegram, fast: bool = False) -> int:
-    store = ArticleStore(DB_PATH)
+def run(cfg: dict, state: State, tg: Telegram, fast: bool = False, breaking: bool = False) -> int:
+    if breaking:
+        cfg = dict(cfg)
+        cfg["breaking_mode"] = True
+        cfg["breaking_threshold"] = cfg.get("breaking_threshold", 85)
+        cfg["strict_title_filter"] = False
+        cfg["max_messages_per_run"] = cfg.get("breaking_max_messages", 4)
+        cfg["max_per_language"] = cfg.get("breaking_per_language", 2)
+        cfg["google_news"] = dict(cfg["google_news"], when=cfg.get("breaking_when", "30m"),
+                                  editions=[e for e in cfg["google_news"]["editions"]])
+        cfg["gdelt"] = dict(cfg["gdelt"], enabled=True, timespan="1h", maxrecords=30)
+        cfg["total_time_budget_sec"] = cfg.get("breaking_total_time_budget_sec", 220)
     if fast:
         keys = set(cfg.get("fast_editions", []))
         cfg = dict(cfg)
@@ -596,15 +640,11 @@ def run(cfg: dict, state: State, tg: Telegram, fast: bool = False) -> int:
     sent = 0
     translator = Translator(cfg.get("translate_titles", False))
     for a in chosen:
-        a.uid = "u" + h(canonical_url(a.url))
-        store.upsert_article(a)
         tr = translator.title_ar(a.title) if a.lang != "ar" else None
         if tg.send_text(format_message(a, cfg, tr)):
             state.mark(a)
-            store.record_sent(a)
             sent += 1
-        time.sleep(3.2)
-    store.log_run(stats, counts, sent)
+        time.sleep(2.5)
     log.info("جُمع %d | مطابق %d | جديد %d | أُرسل %d", stats["total"], stats["relevant"], stats["new"], sent)
 
     g_total = sum(v for k, v in counts.items() if k.startswith("gdelt:"))
@@ -619,20 +659,18 @@ def run(cfg: dict, state: State, tg: Telegram, fast: bool = False) -> int:
                  + ("  ⚠️ لا نتائج" if g_total == 0 else ""),
                  f"✅ مطابق لمصطلحات السعودية: {stats['relevant']} من {stats['total']}",
                  f"🆕 جديد: {stats['new']} | 📨 أُرسل: {sent}"]
+        if breaking:
+            lines.append("🚨 <b>وضع الخبر الفوري مفعل</b>")
         zero = [k for k, v in counts.items() if v == 0]
         if zero:
             lines.append("بلا نتائج: " + "، ".join(zero[:12]))
         tg.send_text("\n".join(lines))
-        tg.send_text(store.stats_text(hours=24))
     elif sent == 0 and not fast and state.should_warn("heartbeat"):
         tg.send_text(f"💤 <b>المراقب يعمل</b> — لا أخبار جديدة تستحق الإرسال الآن.\n"
                      f"فحصت {stats['total']} خبراً، منها {stats['relevant']} مطابقاً للسعودية.")
 
     if (n_total + g_total) == 0 and state.should_warn("noresults"):
         tg.send_text("⚠️ لم أحصل على أي أخبار من المصدرين. راجع سجل التشغيل في GitHub Actions.")
-
-    if sent > 0 and not fast and not manual:
-        tg.send_text(store.stats_text(hours=24))
     return sent
 
 
@@ -641,23 +679,17 @@ def main() -> None:
     ap.add_argument("--config", default=str(ROOT / "config.yaml"))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--fast", action="store_true", help="تشغيل سريع: أهم النسخ فقط، آخر ساعة")
+    ap.add_argument("--breaking", action="store_true", help="وضع الخبر الفوري: تنبيه للخبر المهم جدًا")
     ap.add_argument("--test-telegram", action="store_true")
-    ap.add_argument("--stats", action="store_true", help="عرض إحصاءات قاعدة البيانات")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = yaml.safe_load(Path(args.config).read_text("utf-8"))
     tg = Telegram(dry_run=args.dry_run)
-
     if args.test_telegram:
         tg.send_text("✅ القناة جاهزة! سيصلك هنا ما يُنشر عن السعودية في إعلام العالم.")
         return
-    if args.stats:
-        store = ArticleStore(DB_PATH)
-        tg.send_text(store.stats_text(hours=24))
-        return
-
     state = State()
-    run(cfg, state, tg, fast=args.fast)
+    run(cfg, state, tg, fast=args.fast, breaking=args.breaking)
     state.save()
 
 
