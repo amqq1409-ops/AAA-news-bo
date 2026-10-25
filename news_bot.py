@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-# مراقب أخبار السعودية — ملف واحد. الإعدادات في config.yaml
-# GDELT + Google News (لغات متعددة) -> تنقية -> تلقرام. وضع --fast للفحص السريع
-# وضع --breaking: تنبيه فوري للأخبار المهمة جدًا في الوقت الحقيقي
-
 import argparse
 import datetime as dt
 import email.utils
@@ -15,19 +11,19 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import requests
 import yaml
 
-log = logging.getLogger("newsbot")
+from data_store import ArticleStore
+
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
+DB_PATH = ROOT / "data" / "news.db"
 RIYADH = dt.timezone(dt.timedelta(hours=3))
-UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/2.4; +https://github.com)"
+UA = "Mozilla/5.0 (compatible; SaudiNewsWatch/3.0; +https://github.com)"
 
 GDELT_LANG_CODES = {
     "english": "en", "arabic": "ar", "french": "fr", "german": "de", "spanish": "es", "russian": "ru",
@@ -40,7 +36,6 @@ GDELT_LANG_CODES = {
     "finnish": "fi",
 }
 TRACKING = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ref", "cmpid"}
-
 TOPIC_KEYWORDS = {
     "politics": ["سياسة", "دبلوماسية", "وزير", "رئيس", "مفاوضات", "تعاون", "أمن", "خارجية", "مبادرة"],
     "economy": ["اقتصاد", "استثمار", "سوق", "أسهم", "عملة", "تمويل", "صادرات", "ميزانية", "أرامكو", "pif", "الاستثمار"],
@@ -54,75 +49,40 @@ TOPIC_KEYWORDS = {
     "regional": ["الخليج", "الدول", "المنطقة", "تعاون", "شراكات", "إقليمي"],
     "security": ["أمن", "مخابرات", "دفاع", "حظر", "تدابير", "security"],
 }
-
 BREAKING_KEYWORDS = [
     "saudi", "riyadh", "jeddah", "neom", "aramco", "pif", "vision 2030",
     "الرياض", "السعودية", "نيوم", "أرامكو", "رؤية 2030", "مكة", "جدة",
     "الاستثمار", "طاقة", "نفط", "توسع", "قرار", "عقود", "توقيع", "مبادرة"
 ]
-
-SOURCE_PRIORITY = {
-    "reuters.com": 120,
-    "apnews.com": 115,
-    "bbc.com": 110,
-    "bbc.co.uk": 108,
-    "nytimes.com": 110,
-    "washingtonpost.com": 105,
-    "ft.com": 110,
-    "bloomberg.com": 112,
-    "aljazeera.com": 105,
-    "arabnews.com": 100,
-    "spa.gov.sa": 100,
-    "saudigazette.com.sa": 98,
-    "alriyadh.com": 96,
-    "sabq.org": 96,
-    "alwatan.com.sa": 95,
-    "gulfnews.com": 94,
-    "thenationalnews.com": 94,
-    "skynewsarabia.com": 94,
-    "okaz.com.sa": 94,
-    "aawsat.com": 92,
-    "alarabiya.net": 90,
-    "asharqbusiness.com": 90,
-    "theguardian.com": 100,
-    "cnn.com": 98,
-    "cnbc.com": 95,
-    "economist.com": 98,
-    "france24.com": 90,
-    "dw.com": 88,
-    "lemonde.fr": 88,
-    "elpais.com": 88,
-    "thehindu.com": 84,
-    "timesofisrael.com": 82,
-    "haaretz.com": 82,
-    "scmp.com": 84,
-    "nikkei.com": 82,
-    "koreaherald.com": 80,
-    "thejakartapost.com": 78,
-    "dawn.com": 78,
-    "xinhuanet.com": 70,
-    "cgtn.com": 68,
-    "tass.com": 67,
-    "rt.com": 66,
-}
+SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.co.uk": 108, "nytimes.com": 110,
+    "washingtonpost.com": 105, "ft.com": 110, "bloomberg.com": 112, "aljazeera.com": 105, "arabnews.com": 100,
+    "spa.gov.sa": 100, "saudigazette.com.sa": 98, "alriyadh.com": 96, "sabq.org": 96, "alwatan.com.sa": 95,
+    "gulfnews.com": 94, "thenationalnews.com": 94, "skynewsarabia.com": 94, "okaz.com.sa": 94,
+    "aawsat.com": 92, "alarabiya.net": 90, "asharqbusiness.com": 90, "theguardian.com": 100,
+    "cnn.com": 98, "cnbc.com": 95, "economist.com": 98, "france24.com": 90, "dw.com": 88,
+    "lemonde.fr": 88, "elpais.com": 88, "thehindu.com": 84, "timesofisrael.com": 82,
+    "haaretz.com": 82, "scmp.com": 84, "nikkei.com": 82, "koreaherald.com": 80,
+    "thejakartapost.com": 78, "dawn.com": 78, "xinhuanet.com": 70, "cgtn.com": 68,
+    "tass.com": 67, "rt.com": 66}
 
 
-@dataclass
 class Article:
-    title: str
-    url: str
-    domain: str
-    source_name: str
-    lang: str
-    country_ar: str
-    published: Optional[dt.datetime]
-    origin: str
-    direct: bool
-    tier: str = "other"
-    uid: str = ""
-    topic: str = "general"
-    source_score: int = 0
-    relevance_score: int = 0
+    def __init__(self, title, url, domain, source_name, lang, country_ar, published, origin, direct=False):
+        self.title = title.strip()
+        self.url = canonical_url(url)
+        self.domain = domain.lower()
+        self.source_name = source_name or self.domain or "News"
+        self.lang = lang or "en"
+        self.country_ar = country_ar or ""
+        self.published = published
+        self.origin = origin
+        self.direct = direct
+        self.tier = "other"
+        self.uid = ""
+        self.topic = "general"
+        self.source_score = source_priority(self.domain)
+        self.relevance_score = 0
+        self.breaking_score = 0
 
 
 def canonical_url(url: str) -> str:
@@ -130,8 +90,16 @@ def canonical_url(url: str) -> str:
         p = urlparse(url.strip())
         q = [(k, v) for k, v in parse_qsl(p.query) if k.lower() not in TRACKING]
         return urlunparse((p.scheme, p.netloc.lower(), p.path.rstrip("/"), "", urlencode(q), ""))
-    except ValueError:
+    except Exception:
         return url.strip()
+
+
+def host_of(url: str) -> str:
+    try:
+        host = (urlparse(url).netloc or "").lower()
+    except Exception:
+        return ""
+    return host[4:] if host.startswith("www.") else host
 
 
 def norm_title(t: str) -> str:
@@ -140,22 +108,6 @@ def norm_title(t: str) -> str:
 
 def h(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()[:16]
-
-
-def host_of(url: str) -> str:
-    try:
-        host = (urlparse(url).netloc or "").lower()
-    except ValueError:
-        return ""
-    return host[4:] if host.startswith("www.") else host
-
-
-def http_get(url: str, timeout: int = 20, **kw) -> Optional[requests.Response]:
-    try:
-        return requests.get(url, headers={"User-Agent": UA}, timeout=timeout, **kw)
-    except requests.RequestException as e:
-        log.warning("خطأ شبكة: %s", e)
-        return None
 
 
 def source_priority(domain: str) -> int:
@@ -174,64 +126,52 @@ def classify_topic(title: str) -> str:
     return "general"
 
 
-def compile_terms(terms: List[str]):
-    pats = []
-    for t in terms:
-        t = t.strip().lower()
+def compile_terms(terms):
+    out = []
+    for t in terms or []:
+        t = (t or "").strip().lower()
         if not t:
             continue
         if t.startswith("="):
             base = re.escape(t[1:])
-            pats.append(re.compile(r"(?<!\w)(?:[وفبلك]?(?:ال)?)" + base + r"(?!\w)", re.U))
-        elif re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", t):
-            pats.append(re.compile(re.escape(t)))
+            out.append(re.compile(r"(?<!\w)" + base + r"(?!\w)", re.U))
         else:
-            pats.append(re.compile(r"(?<!\w)" + re.escape(t), re.U))
-    return pats
+            out.append(re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", re.U))
+    return out
 
 
 def title_matches(title: str, pats) -> bool:
-    return any(p.search(title.lower()) for p in pats)
+    txt = title.lower()
+    return any(p.search(txt) for p in pats)
 
 
-def compute_relevance(a: Article, cfg: dict) -> int:
-    title = (a.title or "").lower()
+def compute_relevance(article: Article, cfg: dict) -> int:
+    text = article.title.lower()
+    score = 0
     pats = compile_terms(cfg.get("title_must_match_any", []))
+    if title_matches(article.title, pats):
+        score += 45
+    if any(k.lower() in text for k in ["saudi", "riyadh", "jeddah", "makkah", "ramco", "aramco", "neom", "vision 2030", "السعودية", "الرياض", "أرامكو", "نيوم", "بن سلمان", "رؤية 2030"]):
+        score += 18
+    score += article.source_score // 10
+    score += 8 if article.tier in {"intl", "saudi_arab"} else 0
+    score += 5 if article.lang in {"ar", "en"} else 0
+    return score
+
+
+def breaking_score(article: Article) -> int:
     score = 0
-
-    if title_matches(title, pats):
-        score += 40
-
-    for kw in [
-        "saudi", "riyadh", "riyad", "jeddah", "neom", "aramco", "vision 2030", "hajj", "umrah",
-        "pif", "مكة", "جدة", "نيوم", "أرامكو", "رؤية 2030", "سعود", "السعود", "الرياض"
-    ]:
-        if kw.lower() in title:
-            score += 18
-
-    score += a.source_score // 10
-    score += 8 if a.tier in {"intl", "saudi_arab"} else 0
-    score += 5 if a.lang in {"ar", "en"} else 0
-
-    if title.count("saudi") + title.count("السعود") + title.count("riyadh") > 0:
-        score += 10
-
-    return max(0, score)
-
-
-def breaking_score(a: Article) -> int:
-    score = 0
-    title = (a.title or "").lower()
-    score += min(max(0, a.source_score // 3), 45)
-    score += min(max(0, a.relevance_score), 35)
-    if any(kw.lower() in title for kw in BREAKING_KEYWORDS):
+    text = article.title.lower()
+    score += min(max(0, article.source_score // 3), 45)
+    score += min(max(0, article.relevance_score), 35)
+    if any(k.lower() in text for k in BREAKING_KEYWORDS):
         score += 25
-    if a.topic in {"economy", "energy", "politics", "security", "real_estate", "religion"}:
+    if article.topic in {"economy", "energy", "politics", "security", "real_estate", "religion"}:
         score += 15
-    if a.tier in {"saudi_arab", "intl", "state"}:
+    if article.tier in {"saudi_arab", "intl", "state"}:
         score += 10
-    if a.published:
-        age_minutes = (dt.datetime.now(dt.timezone.utc) - a.published.astimezone(dt.timezone.utc)).total_seconds() / 60
+    if article.published:
+        age_minutes = (dt.datetime.now(dt.timezone.utc) - article.published.astimezone(dt.timezone.utc)).total_seconds() / 60
         if age_minutes <= 30:
             score += 20
         elif age_minutes <= 120:
@@ -239,183 +179,139 @@ def breaking_score(a: Article) -> int:
     return min(score, 100)
 
 
-def fetch_gdelt(cfg: dict, deadline: float) -> tuple[List[Article], Dict[str, int]]:
-    g = cfg["gdelt"]
-    out: List[Article] = []
-    counts: Dict[str, int] = {}
-    for lang in g["languages"]:
-        if time.monotonic() > deadline:
-            log.warning("GDELT: انتهت الميزانية الزمنية")
-            break
-        query = f'{g["query_terms"]} sourcelang:{lang}'
-        url = ("https://api.gdeltproject.org/api/v2/doc/doc?query=" + quote_plus(query) +
-               f'&mode=artlist&format=json&sort=datedesc&maxrecords={g.get("maxrecords", 60)}'
-               f'&timespan={g.get("timespan", "3h")}')
-        data = None
-        for attempt in range(2):
-            time.sleep(9)
-            r = http_get(url, timeout=30)
-            if r is None:
-                continue
-            if r.status_code == 429:
-                log.warning("GDELT: 429 (تمهّل)")
-                time.sleep(25)
-                continue
-            try:
-                data = r.json()
-                break
-            except ValueError:
-                log.warning("GDELT %s: رد غير JSON: %s", lang, r.text[:120].replace("\n", " "))
-        items = (data or {}).get("articles") or []
-        counts[f"gdelt:{lang}"] = len(items)
-        log.info("gdelt | %s -> %d", lang, len(items))
-        out.extend(parse_gdelt_items(items, cfg))
-    return out, counts
+def assign_tier(article: Article, cfg: dict) -> str:
+    dom = article.domain
+    for tier_name, tier_cfg in cfg.get("tiers", {}).items():
+        for d in tier_cfg.get("domains", []):
+            if dom == d or dom.endswith("." + d):
+                article.tier = tier_name
+                return tier_name
+    article.tier = "other"
+    return "other"
 
 
-def parse_gdelt_items(items: list, cfg: dict) -> List[Article]:
-    res = []
-    countries = cfg.get("countries_ar", {})
-    for it in items:
-        title, url = (it.get("title") or "").strip(), (it.get("url") or "").strip()
+def http_get(url: str, timeout: int = 20, **kwargs):
+    try:
+        return requests.get(url, headers={"User-Agent": UA}, timeout=timeout, **kwargs)
+    except requests.RequestException as e:
+        logging.warning("HTTP error: %s", e)
+        return None
+
+
+def parse_gdelt_items(items, cfg):
+    out = []
+    for it in items or []:
+        title = (it.get("title") or "").strip()
+        url = (it.get("url") or "").strip()
         if not title or not url:
             continue
+        lang_name = (it.get("language") or "").strip().lower()
+        lang = GDELT_LANG_CODES.get(lang_name, lang_name or "en")
         pub = None
         sd = it.get("seendate") or ""
         try:
             pub = dt.datetime.strptime(sd, "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc)
-        except ValueError:
+        except Exception:
             pass
-        lang_name = (it.get("language") or "").strip().lower()
-        country = (it.get("sourcecountry") or "").strip()
         domain = (it.get("domain") or host_of(url)).lower()
-        article = Article(
-            title=title,
-            url=url,
-            domain=domain[4:] if domain.startswith("www.") else domain,
-            source_name=domain,
-            lang=GDELT_LANG_CODES.get(lang_name, lang_name or "?"),
-            country_ar=countries.get(country.lower(), country),
-            published=pub,
-            origin="gdelt",
-            direct=True,
-        )
-        article.source_score = source_priority(article.domain)
+        article = Article(title, url, domain, domain, lang, it.get("sourcecountry", ""), pub, "gdelt", True)
         article.topic = classify_topic(article.title)
-        res.append(article)
-    return res
+        article.relevance_score = compute_relevance(article, cfg)
+        article.breaking_score = breaking_score(article)
+        assign_tier(article, cfg)
+        out.append(article)
+    return out
 
 
-def fetch_gnews(cfg: dict, deadline: float) -> tuple[List[Article], Dict[str, int]]:
-    g = cfg["google_news"]
-    out: List[Article] = []
-    counts: Dict[str, int] = {}
-    for ed in g["editions"]:
+def fetch_gdelt(cfg, deadline):
+    gd = cfg.get("gdelt", {})
+    if not gd.get("enabled", True):
+        return [], {}
+    out = []
+    counts = {}
+    for lang in gd.get("languages", ["english", "arabic"]):
         if time.monotonic() > deadline:
-            log.warning("Google News: انتهت الميزانية الزمنية")
             break
-        q = f'{ed["query"]} when:{g.get("when", "3h")}'
-        url = (f'https://news.google.com/rss/search?q={quote_plus(q)}'
-               f'&hl={ed["hl"]}&gl={ed["gl"]}&ceid={quote_plus(ed["ceid"])}')
-        time.sleep(1.5)
-        r = http_get(url)
-        key = f'gnews:{ed["lang"]}-{ed["gl"]}'
+        query = gd.get("query_terms", '"Saudi Arabia" OR Riyadh')
+        url = "https://api.gdeltproject.org/api/v2/doc/doc?query=" + quote_plus(f'{query} sourcelang:{lang}') + f'&mode=artlist&format=json&maxrecords={gd.get("maxrecords", 60)}&sort=datedesc&timespan={gd.get("timespan", "2h")}'
+        r = http_get(url, timeout=30)
         if r is None or r.status_code != 200:
-            log.warning("gnews %s: HTTP %s", key, getattr(r, "status_code", "-"))
-            counts[key] = 0
+            counts[f"gdelt:{lang}"] = 0
             continue
-        arts = parse_gnews_rss(r.content, ed)
-        counts[key] = len(arts)
-        log.info("gnews | %s -> %d", key, len(arts))
-        out.extend(arts)
+        try:
+            data = r.json()
+            items = (data or {}).get("articles") or []
+            counts[f"gdelt:{lang}"] = len(items)
+            out.extend(parse_gdelt_items(items, cfg))
+        except Exception as e:
+            logging.warning("GDELT parse error %s: %s", lang, e)
+            counts[f"gdelt:{lang}"] = 0
     return out, counts
 
 
-def parse_gnews_rss(xml_bytes: bytes, ed: dict) -> List[Article]:
+def parse_gnews_rss(xml_bytes, edition):
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
         return []
-    res = []
+    out = []
     for item in root.iter("item"):
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
         if not title or not link:
             continue
         src = item.find("source")
-        src_name = (src.text or "").strip() if src is not None and src.text else ""
-        src_url = src.get("url", "") if src is not None else ""
-        if src_name and title.endswith(" - " + src_name):
-            title = title[: -len(" - " + src_name)].strip()
+        source_name = (src.text or "").strip() if src is not None and src is not None else ""
         pub = None
         try:
             pub = email.utils.parsedate_to_datetime(item.findtext("pubDate") or "")
             if pub.tzinfo is None:
                 pub = pub.replace(tzinfo=dt.timezone.utc)
-        except (TypeError, ValueError):
-            pass
-        domain = host_of(src_url) if src_url else ""
-        article = Article(
-            title=title,
-            url=link,
-            domain=domain,
-            source_name=src_name or domain or "Google News",
-            lang=ed["lang"],
-            country_ar=ed.get("country_ar", ""),
-            published=pub,
-            origin="gnews",
-            direct=False,
-        )
-        article.source_score = source_priority(article.domain)
+        except Exception:
+            pub = None
+        domain = host_of(link) or (src.get("url", "") if src is not None else "")
+        article = Article(title, link, domain, source_name or domain or "Google News", edition.get("lang", "en"), edition.get("country_ar", ""), pub, "gnews", False)
         article.topic = classify_topic(article.title)
-        res.append(article)
-    return res
+        article.relevance_score = compute_relevance(article, edition)
+        article.breaking_score = breaking_score(article)
+        assign_tier(article, edition)
+        out.append(article)
+    return out
 
 
-class Translator:
-    def __init__(self, enabled: bool):
-        self.enabled = enabled
-        self.fails = 0
-
-    def title_ar(self, text: str) -> Optional[str]:
-        if not self.enabled or self.fails >= 4:
-            return None
-        r = http_get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q="
-                     + quote_plus(text[:300]), timeout=10)
-        try:
-            if r is not None and r.status_code == 200:
-                out = "".join(seg[0] for seg in r.json()[0] if seg and seg[0])
-                if out.strip():
-                    return out.strip()
-        except (ValueError, IndexError, TypeError):
-            pass
-        self.fails += 1
-        return None
-
-
-def assign_tier(a: Article, cfg: dict) -> str:
-    dom = a.domain
-    for tier in ("intl", "saudi_arab", "state"):
-        for d in cfg["tiers"][tier]["domains"]:
-            if dom == d or dom.endswith("." + d):
-                a.tier = tier
-                return tier
-    a.tier = "other"
-    return "other"
+def fetch_gnews(cfg, deadline):
+    gn = cfg.get("google_news", {})
+    if not gn.get("enabled", True):
+        return [], {}
+    out = []
+    counts = {}
+    editions = gn.get("editions", [])
+    for ed in editions:
+        if time.monotonic() > deadline:
+            break
+        q = ed.get("query", '"Saudi Arabia"')
+        url = f'https://news.google.com/rss/search?q={quote_plus(q)}&hl={ed.get("hl", "en-US")}&gl={ed.get("gl", "US")}&ceid={quote_plus(ed.get("ceid", "US:en"))}'
+        r = http_get(url)
+        if r is None or r.status_code != 200:
+            counts[f'gnews:{ed.get("lang")}-{ed.get("gl")}'] = 0
+            continue
+        items = parse_gnews_rss(r.content, ed)
+        counts[f'gnews:{ed.get("lang")}-{ed.get("gl")}'] = len(items)
+        out.extend(items)
+    return out, counts
 
 
 class State:
-    KEEP_DAYS = 21
-
-    def __init__(self, path: Path = STATE_PATH):
-        self.path = path
-        self.data: Dict = {"sent": {}, "warned": {}}
-        if path.exists():
+    def __init__(self, path=STATE_PATH):
+        self.path = Path(path)
+        self.data = {"sent": {}, "warned": {}}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
             try:
-                loaded = json.loads(path.read_text("utf-8"))
+                loaded = json.loads(self.path.read_text("utf-8"))
                 if isinstance(loaded, dict):
                     self.data.update(loaded)
-            except json.JSONDecodeError:
+            except Exception:
                 pass
         self.data.setdefault("sent", {})
         self.data.setdefault("warned", {})
@@ -423,273 +319,208 @@ class State:
     def seen(self, key: str) -> bool:
         return key in self.data["sent"]
 
-    def mark(self, a: Article) -> None:
-        now = int(time.time())
-        self.data["sent"][a.uid] = now
-        self.data["sent"]["t" + h(norm_title(a.title))] = now
+    def mark(self, article: Article):
+        self.data["sent"][article.uid] = int(time.time())
+        self.data["sent"]["t" + h(norm_title(article.title))] = int(time.time())
 
     def should_warn(self, key: str) -> bool:
-        today = time.strftime("%Y-%m-%d")
+        today = dt.datetime.now().strftime("%Y-%m-%d")
         if self.data["warned"].get(key) == today:
             return False
         self.data["warned"][key] = today
         return True
 
-    def save(self) -> None:
-        cutoff = time.time() - self.KEEP_DAYS * 86400
+    def save(self):
+        cutoff = time.time() - 21 * 86400
         self.data["sent"] = {k: v for k, v in self.data["sent"].items() if v > cutoff}
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, separators=(",", ":")), "utf-8")
-
-
-def strong_topic_priority(topic: str) -> int:
-    weights = {
-        "politics": 18,
-        "economy": 18,
-        "energy": 22,
-        "tourism": 16,
-        "sports": 12,
-        "technology": 10,
-        "culture": 8,
-        "religion": 18,
-        "real_estate": 16,
-        "regional": 14,
-        "security": 20,
-        "general": 10,
-    }
-    return weights.get(topic, 10)
-
-
-def select(arts: List[Article], cfg: dict, state: State):
-    pats = compile_terms(cfg.get("title_must_match_any", []))
-    strict = cfg.get("strict_title_filter", True)
-    stats = {"total": len(arts), "relevant": 0, "new": 0}
-    seen_batch = set()
-    cands: List[Article] = []
-    breaking_mode = cfg.get("breaking_mode", False)
-    breaking_threshold = cfg.get("breaking_threshold", 85)
-
-    for a in arts:
-        if a.domain:
-            a.source_score = source_priority(a.domain)
-        a.topic = classify_topic(a.title)
-        assign_tier(a, cfg)
-        a.relevance_score = compute_relevance(a, cfg) + strong_topic_priority(a.topic)
-        a.breaking_score = breaking_score(a)
-
-        if strict and not title_matches(a.title, pats):
-            continue
-        stats["relevant"] += 1
-
-        a.uid = "u" + h(canonical_url(a.url))
-        tkey = "t" + h(norm_title(a.title))
-        dedupe_key = "d" + h(norm_title(a.title)[:180])
-
-        if a.uid in seen_batch or tkey in seen_batch or dedupe_key in seen_batch:
-            continue
-        seen_batch.update([a.uid, tkey, dedupe_key])
-
-        if state.seen(a.uid) or state.seen(tkey):
-            continue
-
-        if a.tier == "other" and not cfg.get("include_other_tier", True):
-            continue
-
-        if breaking_mode:
-            if a.breaking_score < breaking_threshold:
-                continue
-        cands.append(a)
-
-    stats["new"] = len(cands)
-    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
-    cands.sort(key=lambda a: (
-        -(a.breaking_score if breaking_mode else a.relevance_score + (100 if a.tier == "saudi_arab" else 0) + (60 if a.tier == "intl" else 0)),
-        -((a.published or epoch).timestamp()),
-        -a.source_score,
-    ))
-
-    per_lang: Dict[str, int] = {}
-    chosen: List[Article] = []
-    cap_lang = cfg.get("max_per_language", 3)
-    if breaking_mode:
-        cap_lang = cfg.get("breaking_per_language", 2)
-    for a in cands:
-        if per_lang.get(a.lang, 0) >= cap_lang:
-            continue
-        per_lang[a.lang] = per_lang.get(a.lang, 0) + 1
-        chosen.append(a)
-        if len(chosen) >= cfg.get("max_messages_per_run", 12):
-            break
-    return chosen, stats
-
-
-def topic_label(topic: str) -> str:
-    mapping = {
-        "politics": "سياسة",
-        "economy": "اقتصاد",
-        "energy": "طاقة",
-        "tourism": "سياحة",
-        "sports": "رياضة",
-        "technology": "تقنية",
-        "culture": "ثقافة",
-        "religion": "دين/حج",
-        "real_estate": "مشاريع/عقار",
-        "regional": "منطقة/شراكات",
-        "security": "أمن",
-        "general": "عام",
-    }
-    return mapping.get(topic, "عام")
-
-
-def format_message(a: Article, cfg: dict, tr_title: Optional[str] = None) -> str:
-    e = html.escape
-    tier_label = cfg["tiers"][a.tier]["label"]
-    lang_ar = cfg.get("languages_ar", {}).get(a.lang, a.lang)
-    topic = topic_label(a.topic)
-    is_breaking = cfg.get("breaking_mode", False) and getattr(a, "breaking_score", 0) >= cfg.get("breaking_threshold", 85)
-
-    lines = [f"📰 <b>{e(a.title[:220])}</b>"]
-    if is_breaking:
-        lines = ["🚨 <b>BREAKING NEWS</b>"] + lines
-    if tr_title and norm_title(tr_title) != norm_title(a.title):
-        lines.append(f"🔁 <i>{e(tr_title[:220])}</i>")
-    lines += ["", f"📌 <b>{topic}</b> • <b>{getattr(a, 'breaking_score', a.relevance_score)}</b> نقطة", tier_label]
-
-    src = e(a.source_name)
-    if a.domain and a.domain != a.source_name:
-        src += f" ({e(a.domain)})"
-    lines.append(f"🏛 {src}")
-
-    where = " · ".join(x for x in [lang_ar, a.country_ar] if x)
-    lines.append(f"🌐 {where}")
-    if a.published:
-        lines.append("🕒 " + a.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
-    if a.lang != "ar" and a.direct:
-        tr = "https://translate.google.com/translate?sl=auto&tl=ar&u=" + quote_plus(a.url)
-        lines.append(f'🔤 <a href="{e(tr, quote=True)}">ترجمة الصفحة للعربية</a>')
-    lines.append(f'🔗 <a href="{e(a.url, quote=True)}">اقرأ الخبر</a>')
-    return "\n".join(lines)
+        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), "utf-8")
 
 
 class Telegram:
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run=False):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.dry_run = dry_run or not (self.token and self.chat_id)
         if self.dry_run:
-            log.warning("وضع تجريبي: لن يُرسل شيء لتلقرام")
+            logging.warning("Telegram dry-run enabled")
 
     def send_text(self, text: str, preview: bool = False) -> bool:
         if self.dry_run:
             print("-----\n" + text + "\n-----")
             return True
+        payload = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": not preview}
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         try:
-            payload = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
-                       "disable_web_page_preview": not preview}
-            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
             r = requests.post(url, json=payload, timeout=20)
             if r.status_code == 429:
+                wait = 5
                 try:
                     wait = int(r.json().get("parameters", {}).get("retry_after", 5))
-                except (ValueError, AttributeError):
-                    wait = 5
+                except Exception:
+                    pass
                 time.sleep(min(wait + 1, 60))
                 r = requests.post(url, json=payload, timeout=20)
-            if r.status_code != 200:
-                log.error("Telegram فشل: %s %s", r.status_code, r.text[:200])
             return r.status_code == 200
-        except requests.RequestException as ex:
-            log.error("Telegram خطأ شبكة: %s", ex)
+        except requests.RequestException as e:
+            logging.error("Telegram send failed: %s", e)
             return False
 
 
-def run(cfg: dict, state: State, tg: Telegram, fast: bool = False, breaking: bool = False) -> int:
+def topic_label(topic: str) -> str:
+    mapping = {"politics": "سياسة", "economy": "اقتصاد", "energy": "طاقة", "tourism": "سياحة", "sports": "رياضة",
+        "technology": "تقنية", "culture": "ثقافة", "religion": "دين/حج", "real_estate": "مشاريع/عقار",
+        "regional": "منطقة/شراكات", "security": "أمن", "general": "عام"}
+    return mapping.get(topic, "عام")
+
+
+def format_message(article: Article, cfg: dict, translated_title=None) -> str:
+    topic = topic_label(article.topic)
+    breaking = cfg.get("breaking_mode", False) and getattr(article, "breaking_score", 0) >= cfg.get("breaking_threshold", 78)
+    source = article.source_name or article.domain
+    label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "⚪ مصدر آخر")
+    if article.lang != "ar" and translated_title:
+        title_line = f"<b>{html.escape(article.title[:200])}</b>\n🔁 <i>{html.escape(translated_title[:200])}</i>"
+    else:
+        title_line = f"<b>{html.escape(article.title[:200])}</b>"
+    lines = ["🚨 BREAKING NEWS" if breaking else "📰 خبر جديد"]
+    lines.append(title_line)
+    lines.append(f"📌 <b>{topic}</b> • {getattr(article, 'breaking_score', article.relevance_score)} نقطة • {label}")
+    lines.append(f"🏛 {html.escape(source)}")
+    if article.country_ar:
+        lines.append(f"🌐 {html.escape(article.country_ar)}")
+    if article.published:
+        lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+    lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
+    return "\n".join(lines)
+
+
+def apply_saudi_focus(cfg: dict) -> dict:
+    cfg = dict(cfg)
+    cfg["saudi_focus"] = True
+    cfg["strict_title_filter"] = True
+    cfg["breaking_mode"] = cfg.get("breaking_mode", False)
+    cfg["breaking_threshold"] = cfg.get("breaking_threshold", 78)
+    cfg["max_messages_per_run"] = cfg.get("max_messages_per_run", 12)
+    cfg["max_per_language"] = cfg.get("max_per_language", 2)
+    existing = list(cfg.get("title_must_match_any", []))
+    extra = list(cfg.get("saudi_focus_terms", []))
+    cfg["title_must_match_any"] = list(dict.fromkeys(existing + extra))
+    if cfg.get("google_news"):
+        cfg["google_news"]["when"] = cfg.get("breaking_when", "30m") if cfg.get("breaking_mode") else cfg.get("fast_when", "1h")
+    return cfg
+
+
+def select_articles(articles, cfg, state):
+    pats = compile_terms(cfg.get("title_must_match_any", []))
+    selected = []
+    seen = set()
+    for article in articles:
+        article.topic = classify_topic(article.title)
+        article.relevance_score = compute_relevance(article, cfg)
+        article.breaking_score = breaking_score(article)
+        assign_tier(article, cfg)
+        if cfg.get("strict_title_filter", True) and not title_matches(article.title, pats):
+            continue
+        article.uid = "u" + h(article.url)
+        dedupe1 = "d" + h(norm_title(article.title)[:180])
+        if article.uid in seen or dedupe1 in seen or state.seen(article.uid):
+            continue
+        seen.add(article.uid)
+        seen.add(dedupe1)
+        if cfg.get("saudi_focus", False) and article.breaking_score < cfg.get("breaking_threshold", 78):
+            # keep only high-score items in Saudi-focus mode
+            if not any(k.lower() in article.title.lower() for k in ["saudi", "riyadh", "السعودية", "الرياض", "أرامكو", "نيوم", "رؤية 2030", "بن سلمان"]):
+                continue
+        selected.append(article)
+    selected.sort(key=lambda a: (-(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
+    max_per_lang = cfg.get("breaking_per_language", 2) if cfg.get("breaking_mode") else cfg.get("max_per_language", 2)
+    out, counts = [], {}
+    for a in selected:
+        counts[a.lang] = counts.get(a.lang, 0) + 1
+        if counts[a.lang] > max_per_lang:
+            continue
+        out.append(a)
+        if len(out) >= cfg.get("max_messages_per_run", 12):
+            break
+    return out
+
+
+def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store=None) -> int:
+    cfg = dict(cfg)
     if breaking:
-        cfg = dict(cfg)
         cfg["breaking_mode"] = True
-        cfg["breaking_threshold"] = cfg.get("breaking_threshold", 85)
-        cfg["strict_title_filter"] = False
+        cfg["breaking_threshold"] = cfg.get("breaking_threshold", 78)
+        cfg["strict_title_filter"] = True
         cfg["max_messages_per_run"] = cfg.get("breaking_max_messages", 4)
         cfg["max_per_language"] = cfg.get("breaking_per_language", 2)
-        cfg["google_news"] = dict(cfg["google_news"], when=cfg.get("breaking_when", "30m"),
-                                  editions=[e for e in cfg["google_news"]["editions"]])
-        cfg["gdelt"] = dict(cfg["gdelt"], enabled=True, timespan="1h", maxrecords=30)
-        cfg["total_time_budget_sec"] = cfg.get("breaking_total_time_budget_sec", 220)
+        cfg["google_news"] = {**cfg.get("google_news", {}), "when": cfg.get("breaking_when", "30m")}
+        cfg["gdelt"] = {**cfg.get("gdelt", {}), "timespan": "1h", "maxrecords": 80}
     if fast:
-        keys = set(cfg.get("fast_editions", []))
-        cfg = dict(cfg)
-        cfg["google_news"] = dict(cfg["google_news"], when=cfg.get("fast_when", "1h"),
-                                  editions=[e for e in cfg["google_news"]["editions"]
-                                            if f'{e["lang"]}-{e["gl"]}' in keys])
-        cfg["gdelt"] = dict(cfg["gdelt"], enabled=False)
         cfg["max_messages_per_run"] = cfg.get("fast_max_messages", 10)
-        cfg["total_time_budget_sec"] = 240
-    deadline = time.monotonic() + cfg.get("total_time_budget_sec", 600)
-    arts: List[Article] = []
-    counts: Dict[str, int] = {}
-    if cfg.get("google_news", {}).get("enabled", True):
-        a, c = fetch_gnews(cfg, deadline)
-        arts += a
-        counts.update(c)
-    if cfg.get("gdelt", {}).get("enabled", True):
-        a, c = fetch_gdelt(cfg, deadline)
-        arts += a
-        counts.update(c)
+        cfg["max_per_language"] = cfg.get("max_per_language", 2)
+        cfg["google_news"] = {**cfg.get("google_news", {}), "when": cfg.get("fast_when", "1h")}
+    cfg = apply_saudi_focus(cfg)
 
-    chosen, stats = select(arts, cfg, state)
+    deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
+    articles = []
+    counts = {}
+    arts, c = fetch_gnews(cfg, deadline)
+    articles.extend(arts)
+    counts.update(c)
+    arts2, c2 = fetch_gdelt(cfg, deadline)
+    articles.extend(arts2)
+    counts.update(c2)
+
+    chosen = select_articles(articles, cfg, state)
     sent = 0
-    translator = Translator(cfg.get("translate_titles", False))
-    for a in chosen:
-        tr = translator.title_ar(a.title) if a.lang != "ar" else None
-        if tg.send_text(format_message(a, cfg, tr)):
-            state.mark(a)
+    for article in chosen:
+        if store is not None:
+            store.upsert_article(article)
+        translated = None
+        if article.lang != "ar":
+            tr = http_get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=" + quote_plus(article.title[:250]), timeout=12)
+            try:
+                if tr is not None and tr.status_code == 200:
+                    payload = tr.json()
+                    translated = "".join(seg[0] for seg in payload[0] if seg and seg[0])
+            except Exception:
+                translated = None
+        msg = format_message(article, cfg, translated)
+        if tg.send_text(msg):
+            state.mark(article)
+            if store is not None:
+                store.record_sent(article)
             sent += 1
-        time.sleep(2.5)
-    log.info("جُمع %d | مطابق %d | جديد %d | أُرسل %d", stats["total"], stats["relevant"], stats["new"], sent)
-
-    g_total = sum(v for k, v in counts.items() if k.startswith("gdelt:"))
-    n_total = sum(v for k, v in counts.items() if k.startswith("gnews:"))
-    manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch" and not fast
-
-    if manual:
-        lines = ["📊 <b>تقرير التشغيل اليدوي — مراقب أخبار السعودية</b>", "",
-                 f"• Google News: {n_total} خبر من {sum(1 for k in counts if k.startswith('gnews:'))} نسخة"
-                 + ("  ⚠️ لا نتائج" if n_total == 0 else ""),
-                 f"• GDELT: {g_total} خبر من {sum(1 for k in counts if k.startswith('gdelt:'))} لغة"
-                 + ("  ⚠️ لا نتائج" if g_total == 0 else ""),
-                 f"✅ مطابق لمصطلحات السعودية: {stats['relevant']} من {stats['total']}",
-                 f"🆕 جديد: {stats['new']} | 📨 أُرسل: {sent}"]
-        if breaking:
-            lines.append("🚨 <b>وضع الخبر الفوري مفعل</b>")
-        zero = [k for k, v in counts.items() if v == 0]
-        if zero:
-            lines.append("بلا نتائج: " + "، ".join(zero[:12]))
-        tg.send_text("\n".join(lines))
-    elif sent == 0 and not fast and state.should_warn("heartbeat"):
-        tg.send_text(f"💤 <b>المراقب يعمل</b> — لا أخبار جديدة تستحق الإرسال الآن.\n"
-                     f"فحصت {stats['total']} خبراً، منها {stats['relevant']} مطابقاً للسعودية.")
-
-    if (n_total + g_total) == 0 and state.should_warn("noresults"):
-        tg.send_text("⚠️ لم أحصل على أي أخبار من المصدرين. راجع سجل التشغيل في GitHub Actions.")
+        time.sleep(2)
+    stats = {"total": len(articles), "relevant": len(chosen), "new": len(chosen), "sent": sent}
+    if store is not None:
+        store.log_run(stats, counts, sent)
     return sent
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="مراقب أخبار السعودية")
+def main():
+    ap = argparse.ArgumentParser(description="Saudi News Watch")
     ap.add_argument("--config", default=str(ROOT / "config.yaml"))
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--fast", action="store_true", help="تشغيل سريع: أهم النسخ فقط، آخر ساعة")
-    ap.add_argument("--breaking", action="store_true", help="وضع الخبر الفوري: تنبيه للخبر المهم جدًا")
+    ap.add_argument("--fast", action="store_true")
+    ap.add_argument("--breaking", action="store_true")
+    ap.add_argument("--saudi", action="store_true", help="Saudi-focused mode")
     ap.add_argument("--test-telegram", action="store_true")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    cfg = yaml.safe_load(Path(args.config).read_text("utf-8"))
+    cfg = yaml.safe_load(Path(args.config).read_text("utf-8")) or {}
+    if args.saudi:
+        cfg["saudi_focus"] = True
+    if args.breaking:
+        cfg["breaking_mode"] = True
+    cfg = apply_saudi_focus(cfg)
     tg = Telegram(dry_run=args.dry_run)
     if args.test_telegram:
-        tg.send_text("✅ القناة جاهزة! سيصلك هنا ما يُنشر عن السعودية في إعلام العالم.")
+        tg.send_text("✅ القناة جاهزة! يتم رصد ما يكتب عن السعودية في العالم.")
         return
     state = State()
-    run(cfg, state, tg, fast=args.fast, breaking=args.breaking)
+    store = ArticleStore(DB_PATH)
+    run(cfg, state, tg, fast=args.fast, breaking=args.breaking, store=store)
     state.save()
 
 
