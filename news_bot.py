@@ -35,6 +35,26 @@ GDELT_LANG_CODES = {
     "amharic": "am", "somali": "so", "hausa": "ha", "nepali": "ne", "norwegian": "no", "danish": "da",
     "finnish": "fi",
 }
+SOURCE_COUNTRY_CODES = {
+    "united states": "US", "usa": "US", "united kingdom": "GB", "uk": "GB", "britain": "GB",
+    "france": "FR", "germany": "DE", "spain": "ES", "italy": "IT", "russia": "RU",
+    "china": "CN", "japan": "JP", "south korea": "KR", "korea, republic of": "KR",
+    "turkey": "TR", "türkiye": "TR", "iran": "IR", "pakistan": "PK", "india": "IN",
+    "indonesia": "ID", "brazil": "BR", "saudi arabia": "SA", "united arab emirates": "AE",
+    "qatar": "QA", "egypt": "EG", "israel": "IL", "canada": "CA", "australia": "AU",
+    "kuwait": "KW", "bahrain": "BH", "oman": "OM", "jordan": "JO", "lebanon": "LB",
+    "iraq": "IQ", "malaysia": "MY", "singapore": "SG", "portugal": "PT", "switzerland": "CH",
+    "netherlands": "NL", "thailand": "TH", "vietnam": "VN", "poland": "PL", "ukraine": "UA",
+    "greece": "GR", "sweden": "SE", "norway": "NO", "denmark": "DK", "finland": "FI",
+    "czechia": "CZ", "czech republic": "CZ", "romania": "RO", "hungary": "HU",
+    "bulgaria": "BG", "serbia": "RS", "kazakhstan": "KZ", "uzbekistan": "UZ",
+    "kenya": "KE", "nigeria": "NG", "south africa": "ZA", "ethiopia": "ET", "somalia": "SO",
+    "ghana": "GH", "senegal": "SN", "morocco": "MA", "algeria": "DZ", "tunisia": "TN",
+    "bangladesh": "BD", "nepal": "NP", "mexico": "MX", "argentina": "AR", "colombia": "CO",
+    "chile": "CL", "new zealand": "NZ", "ireland": "IE", "belgium": "BE", "austria": "AT",
+    "philippines": "PH", "taiwan": "TW", "hong kong": "HK", "ivory coast": "CI",
+    "côte d'ivoire": "CI", "tanzania": "TZ", "uganda": "UG", "sudan": "SD", "libya": "LY",
+}
 TRACKING = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ref", "cmpid"}
 TOPIC_KEYWORDS = {
     "politics": ["سياسة", "دبلوماسية", "وزير", "رئيس", "مفاوضات", "تعاون", "أمن", "خارجية", "مبادرة"],
@@ -67,13 +87,14 @@ SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.c
 
 
 class Article:
-    def __init__(self, title, url, domain, source_name, lang, country_ar, published, origin, direct=False):
+    def __init__(self, title, url, domain, source_name, lang, country_ar, published, origin, direct=False, country_code=""):
         self.title = title.strip()
         self.url = canonical_url(url)
         self.domain = domain.lower()
         self.source_name = source_name or self.domain or "News"
         self.lang = lang or "en"
         self.country_ar = country_ar or ""
+        self.country_code = country_code or ""
         self.published = published
         self.origin = origin
         self.direct = direct
@@ -104,6 +125,20 @@ def host_of(url: str) -> str:
 
 def norm_title(t: str) -> str:
     return re.sub(r"[\W_]+", " ", t.lower(), flags=re.U).strip()
+
+
+def source_country_code(country: str) -> str:
+    value = (country or "").strip()
+    if len(value) == 2 and value.isascii() and value.isalpha():
+        return value.upper()
+    return SOURCE_COUNTRY_CODES.get(value.casefold(), "")
+
+
+def country_flag(country_code: str) -> str:
+    code = (country_code or "").upper()
+    if len(code) != 2 or not code.isascii() or not code.isalpha():
+        return ""
+    return "".join(chr(ord(char) + 127397) for char in code)
 
 
 def h(s: str) -> str:
@@ -238,7 +273,11 @@ def parse_gdelt_items(items, cfg):
         except Exception:
             pass
         domain = (it.get("domain") or host_of(url)).lower()
-        article = Article(title, url, domain, domain, lang, it.get("sourcecountry", ""), pub, "gdelt", True)
+        source_country = it.get("sourcecountry", "")
+        article = Article(
+            title, url, domain, domain, lang, source_country, pub, "gdelt", True,
+            country_code=source_country_code(source_country),
+        )
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
@@ -294,7 +333,11 @@ def parse_gnews_rss(xml_bytes, edition):
         except Exception:
             pub = None
         domain = host_of(link) or (src.get("url", "") if src is not None else "")
-        article = Article(title, link, domain, source_name or domain or "Google News", edition.get("lang", "en"), edition.get("country_ar", ""), pub, "gnews", False)
+        article = Article(
+            title, link, domain, source_name or domain or "Google News", edition.get("lang", "en"),
+            edition.get("country_ar", ""), pub, "gnews", False,
+            country_code=source_country_code(edition.get("gl", "")),
+        )
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, edition)
         article.breaking_score = breaking_score(article)
@@ -411,7 +454,9 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     lines.append(f"📌 <b>{topic}</b> • {getattr(article, 'breaking_score', article.relevance_score)} نقطة • {label}")
     lines.append(f"🏛 {html.escape(source)}")
     if article.country_ar:
-        lines.append(f"🌐 {html.escape(article.country_ar)}")
+        flag = country_flag(getattr(article, "country_code", ""))
+        country_label = f"{flag} " if flag else ""
+        lines.append(f"🌐 {country_label}{html.escape(article.country_ar)}")
     if article.published:
         lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
     lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
