@@ -394,6 +394,76 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     return "\n".join(lines)
 
 
+def _send_analysis_alert(tg, heading, details):
+    lines = [f"⚠️ <b>{html.escape(heading)}</b>"]
+    lines.extend(f"• {html.escape(str(key))}: {html.escape(str(value))}" for key, value in details.items())
+    return tg.send_text("\n".join(lines))
+
+
+def alert_coordinated_campaign(tg, campaign):
+    if campaign.get("severity", 0) < 0.7 or campaign.get("confidence_score", 0) < 0.6:
+        return False
+    return _send_analysis_alert(tg, "تجمع تغطية متشابهة عبر دول", {
+        "معرّف الرصد": campaign.get("campaign_id", "غير متاح"),
+        "الدول": ", ".join(campaign.get("countries_involved", [])),
+        "الثقة": campaign.get("confidence_score"),
+        "تنبيه": "تشابه المحتوى لا يثبت وجود تنسيق.",
+    })
+
+
+def alert_narrative_shift(tg, shift):
+    if shift.get("shift_score", 0) < 0.6:
+        return False
+    return _send_analysis_alert(tg, "تغير ملحوظ في مفردات التغطية", {
+        "الدولة": shift.get("country_code", "غير محددة"),
+        "مفردات جديدة": ", ".join(shift.get("added_keywords", [])),
+        "مفردات متراجعة": ", ".join(shift.get("dropped_keywords", [])),
+    })
+
+
+def alert_bias_escalation(tg, signal):
+    if signal.get("bias_delta", 0) < 0.15:
+        return False
+    return _send_analysis_alert(tg, "تصاعد تركّز التغطية الموضوعية", {
+        "الدولة": signal.get("country_code", "غير محددة"),
+        "الموضوع": signal.get("dominant_topic", "غير محدد"),
+        "التغير": signal.get("bias_delta"),
+        "تنبيه": "التركيز الموضوعي ليس إثباتاً لتحيز تحريري.",
+    })
+
+
+def alert_negative_surge(tg, signal):
+    if signal.get("negative_share", 0) < 0.65 or signal.get("baseline_delta", 0) < 0.2:
+        return False
+    return _send_analysis_alert(tg, "ارتفاع ملحوظ في عناوين ذات مفردات سلبية", {
+        "الدولة": signal.get("country_code", "غير محددة"),
+        "النسبة الحالية": signal.get("negative_share"),
+        "الزيادة عن خط الأساس": signal.get("baseline_delta"),
+        "تنبيه": "التصنيف قائم على كلمات مفتاحية في العناوين فقط.",
+    })
+
+
+def alert_country_anomaly(tg, anomaly):
+    if anomaly.get("anomaly_score", 0) < 0.8:
+        return False
+    return _send_analysis_alert(tg, "تغير غير معتاد في حجم التغطية", {
+        "الدولة": anomaly.get("country_code", "غير محددة"),
+        "مؤشر الشذوذ": anomaly.get("anomaly_score"),
+        "التفاصيل": anomaly.get("description", "ارتفاع أو انخفاض مقارنة بالفترة المرجعية."),
+    })
+
+
+def alert_media_concentration(tg, signal):
+    if signal.get("source_share", 0) < 0.7 or signal.get("articles_count", 0) < 10:
+        return False
+    return _send_analysis_alert(tg, "تركّز مرتفع لمصدر في العينة", {
+        "الدولة": signal.get("country_code", "غير محددة"),
+        "المصدر": signal.get("source_name", "غير محدد"),
+        "حصة المصدر": signal.get("source_share"),
+        "عدد الأخبار": signal.get("articles_count"),
+    })
+
+
 def apply_saudi_focus(cfg: dict) -> dict:
     cfg = dict(cfg)
     cfg["saudi_focus"] = True
