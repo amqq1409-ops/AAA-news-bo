@@ -3,6 +3,7 @@ name: Saudi News Watch
 on:
   schedule:
     - cron: "5 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -35,7 +36,11 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python news_bot.py ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "5 * * * *" ]; then ARGS="$ARGS --fast"; fi
+          python news_bot.py $ARGS
 
       - name: Save state
         run: |
