@@ -1,6 +1,8 @@
 import os
+import threading
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from news_sources import fetch_bing_news, fetch_newsapi, fetch_sources, parse_feed
 
@@ -29,6 +31,34 @@ class NewsSourceTests(unittest.TestCase):
             self.assertEqual(fetch_newsapi({"enabled": True}, float("inf")), [])
             self.assertEqual(fetch_bing_news({"enabled": True}, float("inf")), [])
 
+    def test_newsapi_all_languages_omits_language_parameter(self):
+        response = Mock()
+        response.json.return_value = {
+            "status": "ok",
+            "articles": [{
+                "title": "Saudi Arabia investment",
+                "url": "https://example.com/news",
+                "source": {"name": "Example"},
+                "publishedAt": "2026-10-25T14:00:00Z",
+            }],
+        }
+        with patch.dict(os.environ, {"NEWSAPI_API_KEY": "test-key"}), patch(
+            "news_sources._request", return_value=response
+        ) as request:
+            articles = fetch_newsapi({"enabled": True, "language": "all"}, float("inf"))
+
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0]["origin"], "newsapi")
+        self.assertNotIn("language", request.call_args.kwargs["params"])
+
+    def test_bing_source_requires_configured_endpoint(self):
+        with patch.dict(os.environ, {"BING_NEWS_API_KEY": "test-key"}), patch(
+            "news_sources._request"
+        ) as request:
+            self.assertEqual(fetch_bing_news({"enabled": True}, float("inf")), [])
+
+        request.assert_not_called()
+
     def test_sources_can_all_be_disabled(self):
         config = {
             "gdelt": {"enabled": False},
@@ -39,6 +69,27 @@ class NewsSourceTests(unittest.TestCase):
         }
 
         self.assertEqual(fetch_sources(config, float("inf")), ([], {}))
+
+    def test_enabled_sources_are_fetched_in_parallel(self):
+        barrier = threading.Barrier(3)
+
+        def fetch(*args):
+            barrier.wait(timeout=2)
+            return [{"title": "parallel"}]
+
+        config = {
+            "gdelt": {"enabled": True, "languages": ["english"]},
+            "google_news": {"enabled": True, "editions": [{"lang": "en", "gl": "US"}]},
+            "rss": {"enabled": True, "feeds": [{"name": "feed", "url": "https://example.com/rss"}]},
+            "source_workers": 3,
+        }
+        with patch("news_sources.fetch_gdelt_language", side_effect=fetch), patch(
+            "news_sources.fetch_gnews_edition", side_effect=fetch
+        ), patch("news_sources.fetch_rss", side_effect=fetch):
+            articles, counts = fetch_sources(config, time.monotonic() + 10)
+
+        self.assertEqual(len(articles), 3)
+        self.assertEqual(len(counts), 3)
 
 
 if __name__ == "__main__":

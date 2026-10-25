@@ -61,6 +61,12 @@ def _item(title, url, *, domain="", source_name="", lang="en", country_ar="", pu
 
 def parse_feed(content, metadata, origin):
     parsed = feedparser.parse(content)
+    if parsed.bozo:
+        logging.warning(
+            "RSS parse warning (%s): %s",
+            metadata.get("name", origin),
+            parsed.bozo_exception,
+        )
     items = []
     for entry in parsed.entries:
         source = entry.get("source") or {}
@@ -205,6 +211,10 @@ def fetch_newsapi(config, deadline):
 
 
 def fetch_bing_news(config, deadline):
+    endpoint = config.get("endpoint")
+    if not endpoint:
+        logging.warning("Bing News Search API was retired; configure a compatible endpoint to enable this source")
+        return []
     token = os.getenv(config.get("api_key_env", "BING_NEWS_API_KEY"))
     if not config.get("enabled", True) or not token:
         if config.get("enabled", True):
@@ -222,7 +232,7 @@ def fetch_bing_news(config, deadline):
     if market and market != "all":
         params["mkt"] = market
     response = _request(
-        config.get("endpoint", "https://api.bing.microsoft.com/v7.0/news/search"),
+        endpoint,
         headers={"Ocp-Apim-Subscription-Key": token},
         params=params,
         timeout=min(15, max(1, deadline - time.monotonic())),
