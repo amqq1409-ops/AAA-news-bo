@@ -54,6 +54,23 @@ SOURCE_COUNTRY_CODES = {
     "chile": "CL", "new zealand": "NZ", "ireland": "IE", "belgium": "BE", "austria": "AT",
     "philippines": "PH", "taiwan": "TW", "hong kong": "HK", "ivory coast": "CI",
     "côte d'ivoire": "CI", "tanzania": "TZ", "uganda": "UG", "sudan": "SD", "libya": "LY",
+    "أمريكا": "US", "الولايات المتحدة": "US", "بريطانيا": "GB", "المملكة المتحدة": "GB",
+    "فرنسا": "FR", "ألمانيا": "DE", "إسبانيا": "ES", "إيطاليا": "IT", "روسيا": "RU",
+    "الصين": "CN", "اليابان": "JP", "كوريا الجنوبية": "KR", "تركيا": "TR", "إيران": "IR",
+    "باكستان": "PK", "الهند": "IN", "إندونيسيا": "ID", "البرازيل": "BR", "السعودية": "SA",
+    "الإمارات": "AE", "قطر": "QA", "مصر": "EG", "إسرائيل": "IL", "كندا": "CA",
+    "أستراليا": "AU", "الكويت": "KW", "البحرين": "BH", "عمان": "OM", "عُمان": "OM",
+    "الأردن": "JO", "لبنان": "LB", "العراق": "IQ", "ماليزيا": "MY", "سنغافورة": "SG",
+    "البرتغال": "PT", "سويسرا": "CH", "هولندا": "NL", "تايلاند": "TH", "فيتنام": "VN",
+    "بولندا": "PL", "أوكرانيا": "UA", "اليونان": "GR", "السويد": "SE", "النرويج": "NO",
+    "الدنمارك": "DK", "فنلندا": "FI", "التشيك": "CZ", "رومانيا": "RO", "المجر": "HU",
+    "بلغاريا": "BG", "صربيا": "RS", "كازاخستان": "KZ", "أوزبكستان": "UZ", "كينيا": "KE",
+    "نيجيريا": "NG", "جنوب أفريقيا": "ZA", "إثيوبيا": "ET", "الصومال": "SO", "غانا": "GH",
+    "السنغال": "SN", "المغرب": "MA", "الجزائر": "DZ", "تونس": "TN", "بنغلاديش": "BD",
+    "نيبال": "NP", "المكسيك": "MX", "الأرجنتين": "AR", "كولومبيا": "CO", "تشيلي": "CL",
+    "نيوزيلندا": "NZ", "أيرلندا": "IE", "بلجيكا": "BE", "النمسا": "AT", "الفلبين": "PH",
+    "تايوان": "TW", "هونغ كونغ": "HK", "ساحل العاج": "CI", "تنزانيا": "TZ", "أوغندا": "UG",
+    "السودان": "SD", "ليبيا": "LY",
 }
 TRACKING = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "ref", "cmpid"}
 TOPIC_KEYWORDS = {
@@ -131,7 +148,11 @@ def source_country_code(country: str) -> str:
     value = (country or "").strip()
     if len(value) == 2 and value.isascii() and value.isalpha():
         return value.upper()
-    return SOURCE_COUNTRY_CODES.get(value.casefold(), "")
+    code = SOURCE_COUNTRY_CODES.get(value.casefold())
+    if code:
+        return code
+    match = re.search(r"\(([a-z]{2})\)\s*$", value, re.I)
+    return match.group(1).upper() if match else ""
 
 
 def country_flag(country_code: str) -> str:
@@ -468,7 +489,8 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     if article.country_ar or flag:
         country_label = f"{flag} " if flag else ""
         country_name = article.country_ar or country_code
-        lines.append(f"🌐 {country_label}{html.escape(country_name)}")
+        code_label = f" · {country_code}" if country_code else ""
+        lines.append(f"🌐 {country_label}{html.escape(country_name)}{code_label}")
     if article.published:
         lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
     lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
