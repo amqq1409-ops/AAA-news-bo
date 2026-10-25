@@ -1,2 +1,7 @@
 requests
 PyYAML
+spacy==3.8.7
+transformers==5.10.0
+textblob==0.19.0
+langdetect==1.0.9
+pycountry==24.6.1
