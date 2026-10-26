@@ -199,8 +199,6 @@ def http_get(url: str, timeout: int = 20, **kwargs):
 
 
 def needs_arabic_translation(article: Article) -> bool:
-    if article.origin != "x":
-        return article.lang.lower() != "ar"
     letters = [char for char in article.title if char.isalpha()]
     if not letters:
         return False
@@ -231,7 +229,7 @@ def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
                 return translated
         except (IndexError, KeyError, TypeError, ValueError) as exc:
             logging.warning("Translation response could not be parsed: %s", exc)
-    logging.warning("Arabic translation unavailable for text: %s", text[:120])
+    logging.warning("Arabic translation unavailable")
     return None
 
 
@@ -532,8 +530,8 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     breaking = cfg.get("breaking_mode", False) and getattr(article, "breaking_score", 0) >= cfg.get("breaking_threshold", 78)
     source = article.source_name or article.domain
     label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "⚪ مصدر آخر")
-    if article.lang != "ar" and translated_title:
-        title_line = f"<b>{html.escape(article.title[:200])}</b>\n🔁 <i>{html.escape(translated_title[:200])}</i>"
+    if translated_title:
+        title_line = f"<b>{html.escape(translated_title[:200])}</b>\n🔤 <i>{html.escape(article.title[:200])}</i>"
     else:
         title_line = f"<b>{html.escape(article.title[:200])}</b>"
     lines = ["🚨 BREAKING NEWS" if breaking else "📰 خبر جديد"]
