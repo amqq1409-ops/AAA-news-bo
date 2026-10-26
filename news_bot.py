@@ -198,6 +198,41 @@ def http_get(url: str, timeout: int = 20, **kwargs):
         return None
 
 
+def needs_arabic_translation(article: Article) -> bool:
+    letters = [char for char in article.title if char.isalpha()]
+    if not letters:
+        return False
+    arabic_letters = sum(
+        "\u0600" <= char <= "\u06ff" or "\u0750" <= char <= "\u077f" for char in letters
+    )
+    return arabic_letters / len(letters) < 0.35
+
+
+def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
+    if not text.strip():
+        return None
+    params = {"client": "gtx", "sl": "auto", "tl": "ar", "dt": "t", "q": text[:5000]}
+    for endpoint in (
+        "https://translate.googleapis.com/translate_a/single",
+        "https://translate.google.com/translate_a/single",
+    ):
+        response = http_get(endpoint, timeout=timeout, params=params)
+        if response is None:
+            continue
+        if response.status_code != 200:
+            logging.warning("Translation endpoint returned HTTP %s", response.status_code)
+            continue
+        try:
+            segments = response.json()[0]
+            translated = "".join(segment[0] for segment in segments if segment and segment[0])
+            if translated.strip():
+                return translated
+        except (IndexError, KeyError, TypeError, ValueError) as exc:
+            logging.warning("Translation response could not be parsed: %s", exc)
+    logging.warning("Arabic translation unavailable")
+    return None
+
+
 def parse_gdelt_items(items, cfg):
     out = []
     for it in items or []:
@@ -247,6 +282,111 @@ def fetch_gdelt(cfg, deadline):
             logging.warning("GDELT parse error %s: %s", lang, e)
             counts[f"gdelt:{lang}"] = 0
     return out, counts
+
+
+def x_search_queries(accounts, terms, max_length=512):
+    term_query = "(" + " OR ".join(f'"{term}"' if " " in term else term for term in terms) + ") -is:retweet"
+    prefix = f" {term_query}"
+    groups = []
+    current = []
+    for account in accounts:
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", account):
+            logging.warning("Skipping invalid X username: %s", account)
+            continue
+        candidate = current + [account]
+        account_query = "(" + " OR ".join(f"from:{handle}" for handle in candidate) + ")"
+        if current and len(account_query + prefix) > max_length:
+            groups.append("(" + " OR ".join(f"from:{handle}" for handle in current) + ")" + prefix)
+            current = [account]
+        else:
+            current = candidate
+    if current:
+        groups.append("(" + " OR ".join(f"from:{handle}" for handle in current) + ")" + prefix)
+    return groups
+
+
+def parse_x_items(payload):
+    users = {user.get("id"): user for user in payload.get("includes", {}).get("users", [])}
+    out = []
+    for item in payload.get("data", []):
+        author = users.get(item.get("author_id"), {})
+        username = author.get("username")
+        post_id = item.get("id")
+        text = (item.get("text") or "").strip()
+        if not username or not post_id or not text:
+            continue
+        published = None
+        try:
+            published = dt.datetime.fromisoformat(item.get("created_at", "").replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError):
+            pass
+        article = Article(
+            text,
+            f"https://x.com/{username}/status/{post_id}",
+            "x.com",
+            f'{author.get("name") or username} (@{username})',
+            item.get("lang", "en"),
+            "X",
+            published,
+            "x",
+            True,
+        )
+        out.append(article)
+    return out
+
+
+def fetch_x(cfg, deadline):
+    x_cfg = cfg.get("x", {})
+    token = os.getenv("X_BEARER_TOKEN")
+    if not x_cfg.get("enabled", True) or not token:
+        if x_cfg.get("enabled", True):
+            logging.info("X collection skipped: X_BEARER_TOKEN is not configured")
+        return [], {"x": 0}
+
+    terms = x_cfg.get(
+        "query_terms",
+        ["Saudi Arabia", "Saudi", "SaudiArabia", "Riyadh", "Jeddah", "Aramco", "NEOM", "KSA", "Vision 2030",
+         "السعودية", "الرياض", "نيوم", "أرامكو"],
+    )
+    queries = x_search_queries(x_cfg.get("accounts", []), terms)
+    start_time = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=x_cfg.get("lookback_minutes", 180))
+    params_base = {
+        "max_results": min(max(int(x_cfg.get("max_results", 100)), 10), 100),
+        "tweet.fields": "created_at,lang,author_id",
+        "expansions": "author_id",
+        "user.fields": "name,username",
+        "start_time": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sort_order": "recency",
+    }
+    articles = []
+    counts = {}
+    for index, query in enumerate(queries, start=1):
+        if time.monotonic() > deadline:
+            break
+        try:
+            response = requests.get(
+                "https://api.x.com/2/tweets/search/recent",
+                headers={"Authorization": "Bearer " + token, "User-Agent": UA},
+                params={**params_base, "query": query},
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            logging.warning("X API request failed: %s", exc)
+            counts[f"x:{index}"] = 0
+            continue
+        if response.status_code != 200:
+            logging.warning("X API returned HTTP %s: %s", response.status_code, response.text[:300])
+            counts[f"x:{index}"] = 0
+            continue
+        try:
+            payload = response.json()
+            items = parse_x_items(payload)
+            counts[f"x:{index}"] = len(items)
+            articles.extend(items)
+        except (ValueError, TypeError, AttributeError) as exc:
+            logging.warning("X API response parse failed: %s", exc)
+            counts[f"x:{index}"] = 0
+    return articles, counts
 
 
 def parse_gnews_rss(xml_bytes, edition):
@@ -374,12 +514,24 @@ def topic_label(topic: str) -> str:
 
 
 def format_message(article: Article, cfg: dict, translated_title=None) -> str:
+    if article.origin == "x":
+        lines = ["𝕏 منشور جديد"]
+        if translated_title:
+            lines.append(f"🔁 <i>{html.escape(translated_title[:1000])}</i>")
+            lines.append(f"🔤 <b>{html.escape(article.title[:1000])}</b>")
+        else:
+            lines.append(f"<b>{html.escape(article.title[:1000])}</b>")
+        lines.append(f"👤 {html.escape(article.source_name)}")
+        if article.published:
+            lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+        lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">عرض المنشور</a>')
+        return "\n".join(lines)
     topic = topic_label(article.topic)
     breaking = cfg.get("breaking_mode", False) and getattr(article, "breaking_score", 0) >= cfg.get("breaking_threshold", 78)
     source = article.source_name or article.domain
     label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "⚪ مصدر آخر")
-    if article.lang != "ar" and translated_title:
-        title_line = f"<b>{html.escape(article.title[:200])}</b>\n🔁 <i>{html.escape(translated_title[:200])}</i>"
+    if translated_title:
+        title_line = f"<b>{html.escape(translated_title[:200])}</b>\n🔤 <i>{html.escape(article.title[:200])}</i>"
     else:
         title_line = f"<b>{html.escape(article.title[:200])}</b>"
     lines = ["🚨 BREAKING NEWS" if breaking else "📰 خبر جديد"]
@@ -432,7 +584,7 @@ def select_articles(articles, cfg, state):
             if not any(k.lower() in article.title.lower() for k in ["saudi", "riyadh", "السعودية", "الرياض", "أرامكو", "نيوم", "رؤية 2030", "بن سلمان"]):
                 continue
         selected.append(article)
-    selected.sort(key=lambda a: (-(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
+    selected.sort(key=lambda a: (a.origin != "x", -(getattr(a, "breaking_score", 0) if cfg.get("breaking_mode") else a.relevance_score), -(a.source_score), -((a.published.timestamp() if a.published else 0))))
     max_per_lang = cfg.get("breaking_per_language", 2) if cfg.get("breaking_mode") else cfg.get("max_per_language", 2)
     out, counts = [], {}
     for a in selected:
@@ -464,6 +616,9 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
     deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
     articles = []
     counts = {}
+    x_articles, x_counts = fetch_x(cfg, deadline)
+    articles.extend(x_articles)
+    counts.update(x_counts)
     arts, c = fetch_gnews(cfg, deadline)
     articles.extend(arts)
     counts.update(c)
@@ -477,14 +632,8 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
         if store is not None:
             store.upsert_article(article)
         translated = None
-        if article.lang != "ar":
-            tr = http_get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=" + quote_plus(article.title[:250]), timeout=12)
-            try:
-                if tr is not None and tr.status_code == 200:
-                    payload = tr.json()
-                    translated = "".join(seg[0] for seg in payload[0] if seg and seg[0])
-            except Exception:
-                translated = None
+        if cfg.get("translate_titles", True) and needs_arabic_translation(article):
+            translated = translate_to_arabic(article.title)
         msg = format_message(article, cfg, translated)
         if tg.send_text(msg):
             state.mark(article)
