@@ -192,7 +192,8 @@ def assign_tier(article: Article, cfg: dict) -> str:
 
 def http_get(url: str, timeout: int = 20, **kwargs):
     try:
-        return requests.get(url, headers={"User-Agent": UA}, timeout=timeout, **kwargs)
+        headers = {"User-Agent": UA, **kwargs.pop("headers", {})}
+        return requests.get(url, headers=headers, timeout=timeout, **kwargs)
     except requests.RequestException as e:
         logging.warning("HTTP error: %s", e)
         return None
@@ -211,6 +212,23 @@ def needs_arabic_translation(article: Article) -> bool:
 def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
     if not text.strip():
         return None
+    api_key = os.getenv("GOOGLE_TRANSLATE_API_KEY")
+    if api_key:
+        response = http_get(
+            "https://translation.googleapis.com/language/translate/v2",
+            timeout=timeout,
+            headers={"x-goog-api-key": api_key},
+            params={"q": text[:5000], "target": "ar", "format": "text"},
+        )
+        if response is not None and response.status_code == 200:
+            try:
+                translated = response.json()["data"]["translations"][0]["translatedText"]
+                if translated.strip():
+                    return html.unescape(translated)
+            except (IndexError, KeyError, TypeError, ValueError) as exc:
+                logging.warning("Google Cloud Translation response could not be parsed: %s", exc)
+        elif response is not None:
+            logging.warning("Google Cloud Translation returned HTTP %s", response.status_code)
     params = {"client": "gtx", "sl": "auto", "tl": "ar", "dt": "t", "q": text[:5000]}
     for endpoint in (
         "https://translate.googleapis.com/translate_a/single",
