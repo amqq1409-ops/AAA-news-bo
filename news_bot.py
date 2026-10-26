@@ -198,6 +198,43 @@ def http_get(url: str, timeout: int = 20, **kwargs):
         return None
 
 
+def needs_arabic_translation(article: Article) -> bool:
+    if article.origin != "x":
+        return article.lang.lower() != "ar"
+    letters = [char for char in article.title if char.isalpha()]
+    if not letters:
+        return False
+    arabic_letters = sum(
+        "\u0600" <= char <= "\u06ff" or "\u0750" <= char <= "\u077f" for char in letters
+    )
+    return arabic_letters / len(letters) < 0.35
+
+
+def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
+    if not text.strip():
+        return None
+    params = {"client": "gtx", "sl": "auto", "tl": "ar", "dt": "t", "q": text[:5000]}
+    for endpoint in (
+        "https://translate.googleapis.com/translate_a/single",
+        "https://translate.google.com/translate_a/single",
+    ):
+        response = http_get(endpoint, timeout=timeout, params=params)
+        if response is None:
+            continue
+        if response.status_code != 200:
+            logging.warning("Translation endpoint returned HTTP %s", response.status_code)
+            continue
+        try:
+            segments = response.json()[0]
+            translated = "".join(segment[0] for segment in segments if segment and segment[0])
+            if translated.strip():
+                return translated
+        except (IndexError, KeyError, TypeError, ValueError) as exc:
+            logging.warning("Translation response could not be parsed: %s", exc)
+    logging.warning("Arabic translation unavailable for text: %s", text[:120])
+    return None
+
+
 def parse_gdelt_items(items, cfg):
     out = []
     for it in items or []:
@@ -481,9 +518,11 @@ def topic_label(topic: str) -> str:
 def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     if article.origin == "x":
         lines = ["𝕏 منشور جديد"]
-        lines.append(f"<b>{html.escape(article.title[:1000])}</b>")
         if translated_title:
             lines.append(f"🔁 <i>{html.escape(translated_title[:1000])}</i>")
+            lines.append(f"🔤 <b>{html.escape(article.title[:1000])}</b>")
+        else:
+            lines.append(f"<b>{html.escape(article.title[:1000])}</b>")
         lines.append(f"👤 {html.escape(article.source_name)}")
         if article.published:
             lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
@@ -595,14 +634,8 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, store
         if store is not None:
             store.upsert_article(article)
         translated = None
-        if article.lang != "ar":
-            tr = http_get("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=" + quote_plus(article.title[:250]), timeout=12)
-            try:
-                if tr is not None and tr.status_code == 200:
-                    payload = tr.json()
-                    translated = "".join(seg[0] for seg in payload[0] if seg and seg[0])
-            except Exception:
-                translated = None
+        if cfg.get("translate_titles", True) and needs_arabic_translation(article):
+            translated = translate_to_arabic(article.title)
         msg = format_message(article, cfg, translated)
         if tg.send_text(msg):
             state.mark(article)
