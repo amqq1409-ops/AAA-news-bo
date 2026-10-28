@@ -513,9 +513,21 @@ def topic_label(topic: str) -> str:
     return mapping.get(topic, "عام")
 
 
+def is_published_today(article: Article, today=None) -> bool:
+    published = article.published
+    if published is None:
+        return False
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=dt.timezone.utc)
+    today = today or dt.datetime.now(RIYADH).date()
+    return published.astimezone(RIYADH).date() == today
+
+
 def format_message(article: Article, cfg: dict, translated_title=None) -> str:
+    published_riyadh = article.published.astimezone(RIYADH)
+    publication_date = "📅 تاريخ النشر: " + published_riyadh.strftime("%Y-%m-%d")
     if article.origin == "x":
-        lines = ["𝕏 منشور جديد"]
+        lines = [publication_date, "𝕏 منشور جديد"]
         if translated_title:
             lines.append(f"🔁 <i>{html.escape(translated_title[:1000])}</i>")
             lines.append(f"🔤 <b>{html.escape(article.title[:1000])}</b>")
@@ -523,7 +535,7 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
             lines.append(f"<b>{html.escape(article.title[:1000])}</b>")
         lines.append(f"👤 {html.escape(article.source_name)}")
         if article.published:
-            lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+            lines.append("🕒 " + published_riyadh.strftime("%H:%M") + " (الرياض)")
         lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">عرض المنشور</a>')
         return "\n".join(lines)
     topic = topic_label(article.topic)
@@ -534,14 +546,14 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
         title_line = f"<b>{html.escape(translated_title[:200])}</b>\n🔤 <i>{html.escape(article.title[:200])}</i>"
     else:
         title_line = f"<b>{html.escape(article.title[:200])}</b>"
-    lines = ["🚨 BREAKING NEWS" if breaking else "📰 خبر جديد"]
+    lines = [publication_date, "🚨 BREAKING NEWS" if breaking else "📰 خبر جديد"]
     lines.append(title_line)
     lines.append(f"📌 <b>{topic}</b> • {getattr(article, 'breaking_score', article.relevance_score)} نقطة • {label}")
     lines.append(f"🏛 {html.escape(source)}")
     if article.country_ar:
         lines.append(f"🌐 {html.escape(article.country_ar)}")
     if article.published:
-        lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+        lines.append("🕒 " + published_riyadh.strftime("%H:%M") + " (الرياض)")
     lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
     return "\n".join(lines)
 
@@ -567,6 +579,8 @@ def select_articles(articles, cfg, state):
     selected = []
     seen = set()
     for article in articles:
+        if not is_published_today(article):
+            continue
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
