@@ -569,19 +569,18 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     breaking = cfg.get("breaking_mode", False) and getattr(article, "breaking_score", 0) >= cfg.get("breaking_threshold", 78)
     source = article.source_name or article.domain
     label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "⚪ مصدر آخر")
-    if translated_title:
-        title_line = f"<b>{html.escape(translated_title[:200])}</b>\n🔤 <i>{html.escape(article.title[:200])}</i>"
-    else:
-        title_line = f"<b>{html.escape(article.title[:200])}</b>"
     lines.append("🚨 BREAKING NEWS" if breaking else "📰 خبر جديد")
-    lines.append(title_line)
+    if translated_title:
+        lines.append(f"🔁 <b>{html.escape(translated_title[:200])}</b>")
+    lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
+    original_title = html.escape(article.title[:200])
+    lines.append(f"🔤 <i>{original_title}</i>" if translated_title else f"<b>{original_title}</b>")
     lines.append(f"📌 <b>{topic}</b> • {getattr(article, 'breaking_score', article.relevance_score)} نقطة • {label}")
     lines.append(f"🏛 {html.escape(source)}")
     if article.country_ar:
         lines.append(f"🌐 {html.escape(article.country_ar)}")
-    if article.published:
+    if published_riyadh:
         lines.append("🕒 " + published_riyadh.strftime("%H:%M") + " (الرياض)")
-    lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
     return "\n".join(lines)
 
 
