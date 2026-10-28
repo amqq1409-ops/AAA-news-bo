@@ -192,7 +192,8 @@ def assign_tier(article: Article, cfg: dict) -> str:
 
 def http_get(url: str, timeout: int = 20, **kwargs):
     try:
-        return requests.get(url, headers={"User-Agent": UA}, timeout=timeout, **kwargs)
+        headers = {"User-Agent": UA, **kwargs.pop("headers", {})}
+        return requests.get(url, headers=headers, timeout=timeout, **kwargs)
     except requests.RequestException as e:
         logging.warning("HTTP error: %s", e)
         return None
@@ -211,6 +212,23 @@ def needs_arabic_translation(article: Article) -> bool:
 def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
     if not text.strip():
         return None
+    api_key = os.getenv("GOOGLE_TRANSLATE_API_KEY")
+    if api_key:
+        response = http_get(
+            "https://translation.googleapis.com/language/translate/v2",
+            timeout=timeout,
+            headers={"x-goog-api-key": api_key},
+            params={"q": text[:5000], "target": "ar", "format": "text"},
+        )
+        if response is not None and response.status_code == 200:
+            try:
+                translated = response.json()["data"]["translations"][0]["translatedText"]
+                if translated.strip():
+                    return html.unescape(translated)
+            except (IndexError, KeyError, TypeError, ValueError) as exc:
+                logging.warning("Google Cloud Translation response could not be parsed: %s", exc)
+        elif response is not None:
+            logging.warning("Google Cloud Translation returned HTTP %s", response.status_code)
     params = {"client": "gtx", "sl": "auto", "tl": "ar", "dt": "t", "q": text[:5000]}
     for endpoint in (
         "https://translate.googleapis.com/translate_a/single",
@@ -513,9 +531,30 @@ def topic_label(topic: str) -> str:
     return mapping.get(topic, "عام")
 
 
+def publication_datetime_riyadh(article: Article):
+    published = article.published
+    if published is None:
+        return None
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=dt.timezone.utc)
+    return published.astimezone(RIYADH)
+
+
+def is_published_today(article: Article, today=None) -> bool:
+    published = publication_datetime_riyadh(article)
+    if published is None:
+        return False
+    today = today or dt.datetime.now(RIYADH).date()
+    return published.date() == today
+
+
 def format_message(article: Article, cfg: dict, translated_title=None) -> str:
+    published_riyadh = publication_datetime_riyadh(article)
+    lines = []
+    if published_riyadh:
+        lines.append("📅 تاريخ النشر: " + published_riyadh.strftime("%Y-%m-%d"))
     if article.origin == "x":
-        lines = ["𝕏 منشور جديد"]
+        lines.append("𝕏 منشور جديد")
         if translated_title:
             lines.append(f"🔁 <i>{html.escape(translated_title[:1000])}</i>")
             lines.append(f"🔤 <b>{html.escape(article.title[:1000])}</b>")
@@ -523,16 +562,14 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
             lines.append(f"<b>{html.escape(article.title[:1000])}</b>")
         lines.append(f"👤 {html.escape(article.source_name)}")
         if article.published:
-            lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+            lines.append("🕒 " + published_riyadh.strftime("%H:%M") + " (الرياض)")
         lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">عرض المنشور</a>')
         return "\n".join(lines)
     topic = topic_label(article.topic)
     breaking = cfg.get("breaking_mode", False) and getattr(article, "breaking_score", 0) >= cfg.get("breaking_threshold", 78)
     source = article.source_name or article.domain
     label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "⚪ مصدر آخر")
-    lines = ["🚨 BREAKING NEWS" if breaking else "📰 خبر جديد"]
-    if article.published:
-        lines.append("🕒 " + article.published.astimezone(RIYADH).strftime("%Y-%m-%d %H:%M") + " (الرياض)")
+    lines.append("🚨 BREAKING NEWS" if breaking else "📰 خبر جديد")
     if translated_title:
         lines.append(f"🔁 <b>{html.escape(translated_title[:200])}</b>")
     lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
@@ -542,6 +579,8 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
     lines.append(f"🏛 {html.escape(source)}")
     if article.country_ar:
         lines.append(f"🌐 {html.escape(article.country_ar)}")
+    if published_riyadh:
+        lines.append("🕒 " + published_riyadh.strftime("%H:%M") + " (الرياض)")
     return "\n".join(lines)
 
 
@@ -566,6 +605,8 @@ def select_articles(articles, cfg, state):
     selected = []
     seen = set()
     for article in articles:
+        if not is_published_today(article):
+            continue
         article.topic = classify_topic(article.title)
         article.relevance_score = compute_relevance(article, cfg)
         article.breaking_score = breaking_score(article)
