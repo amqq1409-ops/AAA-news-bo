@@ -513,21 +513,30 @@ def topic_label(topic: str) -> str:
     return mapping.get(topic, "عام")
 
 
-def is_published_today(article: Article, today=None) -> bool:
+def publication_datetime_riyadh(article: Article):
     published = article.published
     if published is None:
-        return False
+        return None
     if published.tzinfo is None:
         published = published.replace(tzinfo=dt.timezone.utc)
+    return published.astimezone(RIYADH)
+
+
+def is_published_today(article: Article, today=None) -> bool:
+    published = publication_datetime_riyadh(article)
+    if published is None:
+        return False
     today = today or dt.datetime.now(RIYADH).date()
-    return published.astimezone(RIYADH).date() == today
+    return published.date() == today
 
 
 def format_message(article: Article, cfg: dict, translated_title=None) -> str:
-    published_riyadh = article.published.astimezone(RIYADH)
-    publication_date = "📅 تاريخ النشر: " + published_riyadh.strftime("%Y-%m-%d")
+    published_riyadh = publication_datetime_riyadh(article)
+    lines = []
+    if published_riyadh:
+        lines.append("📅 تاريخ النشر: " + published_riyadh.strftime("%Y-%m-%d"))
     if article.origin == "x":
-        lines = [publication_date, "𝕏 منشور جديد"]
+        lines.append("𝕏 منشور جديد")
         if translated_title:
             lines.append(f"🔁 <i>{html.escape(translated_title[:1000])}</i>")
             lines.append(f"🔤 <b>{html.escape(article.title[:1000])}</b>")
@@ -546,7 +555,7 @@ def format_message(article: Article, cfg: dict, translated_title=None) -> str:
         title_line = f"<b>{html.escape(translated_title[:200])}</b>\n🔤 <i>{html.escape(article.title[:200])}</i>"
     else:
         title_line = f"<b>{html.escape(article.title[:200])}</b>"
-    lines = [publication_date, "🚨 BREAKING NEWS" if breaking else "📰 خبر جديد"]
+    lines.append("🚨 BREAKING NEWS" if breaking else "📰 خبر جديد")
     lines.append(title_line)
     lines.append(f"📌 <b>{topic}</b> • {getattr(article, 'breaking_score', article.relevance_score)} نقطة • {label}")
     lines.append(f"🏛 {html.escape(source)}")
