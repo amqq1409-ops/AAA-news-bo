@@ -10,6 +10,10 @@ on:
         description: "تجربة بدون إرسال لتلقرام"
         type: boolean
         default: false
+      test_telegram:
+        description: "إرسال رسالة مرحبا فقط إلى تلقرام"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -41,6 +45,7 @@ jobs:
         run: |
           ARGS=""
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
+          if [ "${{ inputs.test_telegram }}" = "true" ]; then ARGS="$ARGS --test-telegram --test-message 'مرحبا'"; fi
           if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "5 * * * *" ]; then ARGS="$ARGS --fast"; fi
           python news_bot.py $ARGS
 

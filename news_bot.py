@@ -695,6 +695,7 @@ def main():
     ap.add_argument("--breaking", action="store_true")
     ap.add_argument("--saudi", action="store_true", help="Saudi-focused mode")
     ap.add_argument("--test-telegram", action="store_true")
+    ap.add_argument("--test-message", default="✅ القناة جاهزة! يتم رصد ما يكتب عن السعودية في العالم.")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = yaml.safe_load(Path(args.config).read_text("utf-8")) or {}
@@ -705,7 +706,7 @@ def main():
     cfg = apply_saudi_focus(cfg)
     tg = Telegram(dry_run=args.dry_run)
     if args.test_telegram:
-        tg.send_text("✅ القناة جاهزة! يتم رصد ما يكتب عن السعودية في العالم.")
+        tg.send_text(args.test_message)
         return
     state = State()
     store = ArticleStore(DB_PATH)
