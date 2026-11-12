@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>البحث المتقدم</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header><h1>🔍 البحث المتقدم</h1><nav><a href="/dashboard">لوحة التحكم</a><a href="/map">الدول</a><a href="/analytics">التحليلات</a></nav></header>
+  <main>
+    <form id="search-form" class="panel filters">
+      <label>كلمات البحث <input name="q" maxlength="200"></label>
+      <label>الدولة <input name="country"></label>
+      <label>اللغة <input name="language"></label>
+      <label>الموضوع <input name="topic"></label>
+      <label>المصدر <input name="source"></label>
+      <label>من تاريخ <input name="start_date" type="date"></label>
+      <label>إلى تاريخ <input name="end_date" type="date"></label>
+      <label>المشاعر <select name="sentiment"><option value="">الكل</option><option value="positive">إيجابي</option><option value="negative">سلبي</option><option value="neutral">محايد</option></select></label>
+      <label>الحد الأدنى لجودة المصدر <input name="min_source_score" type="number" min="0" max="120"></label>
+      <button class="button" type="submit">بحث</button>
+    </form>
+    <p id="status" role="status"></p><section id="results"></section>
+  </main>
+  <script src="/static/js/search.js" defer></script>
+</body>
+</html>

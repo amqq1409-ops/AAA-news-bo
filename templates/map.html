@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>توزيع الأخبار حسب الدول</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+</head>
+<body>
+  <header><h1>🌍 توزيع الأخبار حسب الدول</h1><nav><a href="/dashboard">لوحة التحكم</a><a href="/analytics">التحليلات</a><a href="/search">البحث</a></nav></header>
+  <main><p id="status" role="status">جارٍ تحميل البيانات…</p>
+    <section class="panel"><h2>خريطة مصادر الأخبار</h2><div id="world-map" class="world-map" role="img" aria-label="خريطة توزيع مصادر الأخبار"></div></section>
+    <section class="panel country-panel"><label>تصفية الدول <input id="country-filter" type="search" autocomplete="off"></label>
+      <button id="country-sort" class="button" type="button">ترتيب: الأكثر أخباراً</button><div id="countries"></div>
+    </section>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/static/js/map.js" defer></script>
+</body>
+</html>
