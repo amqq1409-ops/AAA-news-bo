@@ -10,6 +10,10 @@ on:
         description: "تجربة بدون إرسال لتلقرام"
         type: boolean
         default: false
+      limit:
+        description: "إرسال تجريبي: أحدث كم خبر؟ (اتركه فارغًا للتشغيل العادي)"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -43,12 +47,14 @@ jobs:
         run: |
           ARGS=""
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
+          LIMIT="${{ inputs.limit }}"
+          if [[ "$LIMIT" =~ ^[0-9]+$ ]] && [ "$LIMIT" -gt 0 ]; then ARGS="$ARGS --limit $LIMIT"; fi
           if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "5 * * * *" ]; then ARGS="$ARGS --fast"; fi
           python news_bot.py $ARGS
 
       - name: Save state
         # لا حفظ في التشغيل التجريبي، ولا من أي فرع غير main
-        if: github.ref == 'refs/heads/main' && inputs.dry_run != true
+        if: github.ref == 'refs/heads/main' && inputs.dry_run != true && inputs.limit == ''
         run: |
           set -euo pipefail
           git config user.name  "news-bot"

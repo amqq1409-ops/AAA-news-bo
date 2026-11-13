@@ -934,6 +934,11 @@ def sort_key(article: Article, cfg: dict):
 def select_clusters(clusters, cfg):
     """منشورات X أولًا بحدّها، ثم حصة لكل منطقة، ثم الأعلى نقاطًا مع حدود اللغات."""
     max_total = cfg.get("max_messages_per_run", 12)
+    if cfg.get("test_latest"):
+        # إرسال تجريبي: أحدث الأخبار نشرًا فقط، بلا حصص ولا حدود لغات
+        news = [c for c in clusters if c.origin != "x"]
+        news.sort(key=lambda a: -(a.published.timestamp() if a.published else 0))
+        return news[:max_total]
     x_posts = [c for c in clusters if c.origin == "x"][: cfg.get("x", {}).get("max_per_run", 5)]
     news = sorted((c for c in clusters if c.origin != "x"), key=lambda a: sort_key(a, cfg))
     slots = max(0, max_total - len(x_posts))
@@ -1042,7 +1047,7 @@ def archive_record(article: Article) -> dict:
 
 # ---------------------------------------------------------------- التشغيل
 def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archive: Archive | None = None,
-        now: dt.datetime | None = None, fetchers=None) -> int:
+        now: dt.datetime | None = None, fetchers=None, limit: int = 0) -> int:
     cfg = dict(cfg)
     if breaking:
         cfg["breaking_mode"] = True
@@ -1053,6 +1058,9 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
         cfg["gdelt"] = {**cfg.get("gdelt", {}), "timespan": "1h", "maxrecords": 80}
     if fast:
         cfg["max_messages_per_run"] = cfg.get("fast_max_messages", 10)
+    if limit:
+        cfg["max_messages_per_run"] = int(limit)
+        cfg["test_latest"] = True
     cfg = apply_saudi_focus(cfg)
     archive = archive or Archive(ARCHIVE_DIR)
     now = now or dt.datetime.now(RIYADH)
@@ -1109,8 +1117,9 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
         if not tg.dry_run:
             time.sleep(2)
 
-    check_health(statuses, cfg, state, tg)
-    maybe_send_digests(cfg, state, tg, archive, now)
+    if not cfg.get("test_latest"):
+        check_health(statuses, cfg, state, tg)
+        maybe_send_digests(cfg, state, tg, archive, now)
     logging.info("collected=%d candidates=%d stories=%d sent=%d sources=%s ai_calls_today=%s",
                  len(articles), len(candidates), len(fresh), sent,
                  {k: v[0] for k, v in statuses.items()}, state.data["ai"].get("calls", 0))
@@ -1125,6 +1134,7 @@ def main():
     ap.add_argument("--breaking", action="store_true")
     ap.add_argument("--saudi", action="store_true", help="Saudi-focused mode")
     ap.add_argument("--test-telegram", action="store_true")
+    ap.add_argument("--limit", type=int, default=0, help="إرسال تجريبي: أحدث N أخبار فقط")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = yaml.safe_load(Path(args.config).read_text("utf-8")) or {}
@@ -1136,7 +1146,7 @@ def main():
         return
     state = State()
     archive = Archive(ARCHIVE_DIR)
-    run(cfg, state, tg, fast=args.fast, breaking=args.breaking, archive=archive)
+    run(cfg, state, tg, fast=args.fast, breaking=args.breaking, archive=archive, limit=args.limit)
     if tg.dry_run:
         logging.info("Dry run: nothing was saved")
         return
