@@ -199,9 +199,17 @@ class MessageTests(unittest.TestCase):
         self.assertIn("#طاقة #اليابان #شرق_آسيا", msg)
         self.assertIn("اليابان — شرق آسيا", msg)
         self.assertIn("📝 ملخص من جملتين.", msg)
+        self.assertIn("أرامكو 🟢<u>السعودية</u> وتويوتا", msg)
         self.assertIn("🟢 النبرة: إيجابي", msg)
         self.assertIn("&lt;b&gt;Aramco&lt;/b&gt; &amp;", msg)
         self.assertLess(len(msg), 4096)
+
+    def test_saudi_word_highlight(self):
+        out = nb.highlight_saudi("ولي العهد السعودي يبحث مع وزير سعودي مستقبل السعودية")
+        self.assertEqual(out.count("🟢"), 1)          # الدائرة الخضراء مرة واحدة
+        self.assertEqual(out.count("<u>"), 3)          # والخط تحت كل ورود
+        self.assertIn("🟢<u>السعودي</u>", out)
+        self.assertEqual(nb.highlight_saudi("أخبار قطر"), "أخبار قطر")
 
     def test_hashtag(self):
         self.assertEqual(nb.hashtag("عُمان"), "#عمان")
@@ -360,3 +368,67 @@ class ConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GulfTests(unittest.TestCase):
+    def test_subjects_in_many_languages(self):
+        cases = [("UAE and India sign trade pact", "en", ["AE"]), ("Dubaï accueille un sommet sur l'IA", "fr", ["AE"]),
+                 ("قطر والكويت توقعان اتفاقية غاز", "ar", ["QA", "KW"]), ("البحرين تستضيف القمة الخليجية", "ar", ["BH"]),
+                 ("سلطنة عمان تعلن ميزانية 2027", "ar", ["OM"]), ("الوفد العماني يصل طوكيو", "ar", ["OM"]),
+                 ("カタール、LNG増産を発表", "ja", ["QA"]), ("科威特宣布新投资计划", "zh", ["KW"]),
+                 ("Катар и Оман обсудили поставки газа", "ru", ["QA", "OM"]), ("Katar'da yeni dönem", "tr", ["QA"]),
+                 ("BAE ile anlaşma imzalandı", "tr", ["AE"]), ("Bahrein acoge el Gran Premio", "es", ["BH"]),
+                 ("Oman opens new port in Duqm", "en", ["OM"]), ("אבו דאבי משקיעה בישראל", "he", ["AE"])]
+        for title, lang, expected in cases:
+            self.assertEqual(nb.GULF.subjects(title, lang), expected, title)
+
+    def test_other_meanings_rejected(self):
+        for title, lang in [("Oman kodin ostaminen kallistuu", "fi"), ("Katar sienny: jak leczyć", "pl"),
+                            ("ملك الأردن يفتتح مشروعًا في عمان", "ar"), ("Arsenal win at Emirates Stadium", "en"),
+                            ("Governo de Santa Catarina anuncia obras", "pt"), ("Woman wins award in Roman city", "en"),
+                            ("Операция по удалению катаракты", "ru"), ("My bae is the best", "en")]:
+            self.assertEqual(nb.GULF.subjects(title, lang), [], title)
+
+    def test_every_gnews_edition_has_gulf_query_or_is_skipped(self):
+        import gulf
+        missing = sorted({ed["lang"] for ed in CFG["google_news"]["editions"] if not gulf.query_for(ed)})
+        self.assertEqual(missing, ["am"])  # الأمهرية فقط بلا صيغة بحث خليجية
+
+    def test_separate_batch_with_country_cap_and_saudi_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tg, state = Recorder(), new_state(tmp)
+            items = [art("Saudi Arabia and Qatar sign rail link deal", "reuters.com", source="Reuters"),
+                     art("Kuwait approves new airport terminal budget", "kuna.net.kw", country="Kuwait"),
+                     art("Oman opens new port in Duqm", "timesofoman.com", country="Oman")]
+            uae = ["Dubai announces new tower downtown", "UAE central bank holds interest rates", "Abu Dhabi fund buys stake in airline",
+                   "Sharjah book fair draws record visitors", "Emirati astronaut returns from space station", "Dubai airport traffic hits record"]
+            items += [art(t, f"site{i}.ae", country="United Arab Emirates") for i, t in enumerate(uae)]
+            run_with(items, state, tg, tmp)
+            sep = next(i for i, m in enumerate(tg.sent) if "أخبار الخليج" in m and "🌴" in m)
+            before, after = tg.sent[:sep], tg.sent[sep + 1:]
+            self.assertEqual(len(before), 1)
+            self.assertIn("خبر عن 🟢 السعودية", before[0])   # خبر السعودية وقطر في قسم السعودية
+            self.assertTrue(all("خبر خليجي —" in m for m in after))
+            self.assertEqual(sum("خبر خليجي — الإمارات" in m for m in after), 3)   # حد الدولة الواحدة
+            self.assertEqual(sum("#أخبار_الكويت" in m for m in after), 1)
+            self.assertEqual(sum("#أخبار_عمان" in m for m in after), 1)
+            self.assertTrue(all("#الخليج" in m for m in after))
+
+    def test_no_separator_when_no_gulf_news_and_can_disable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tg, state = Recorder(), new_state(tmp)
+            run_with([art("Saudi Arabia opens new metro line in Riyadh", "arabnews.com")], state, tg, tmp)
+            self.assertFalse(any("أخبار الخليج" in m for m in tg.sent))
+            tg2, state2 = Recorder(), new_state(tmp + "/x")
+            off = {**CFG, "gulf": {"enabled": False}}
+            run_with([art("Kuwait approves new airport terminal budget", "kuna.net.kw")], state2, tg2, tmp, cfg=off)
+            self.assertEqual(tg2.sent, [])
+
+    def test_gulf_digest_is_separate(self):
+        recs = [{"ts": time.time(), "title": "a", "url": "https://e.com/1", "origin": "gnews", "score": 60, "section": "gulf", "subject": "QA"},
+                {"ts": time.time(), "title": "b", "url": "https://e.com/2", "origin": "gnews", "score": 60}]
+        import gulf
+        text = build_digest([r for r in recs if r.get("section") == "gulf"], "موجز الخليج", 10, nb.TOPIC_LABELS, geo.REGIONS_AR, ai.TONES, gulf.NAMES_AR)
+        self.assertIn("حسب الدولة", text)
+        self.assertIn("قطر 1", text)
+        self.assertIn("عدد ما نُشر: 1", text)

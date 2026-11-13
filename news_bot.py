@@ -18,6 +18,7 @@ import requests
 import yaml
 
 import geo
+import gulf
 from ai import TONE_EMOJI, TONES, AIEnricher
 from archive import Archive, build_digest
 
@@ -162,6 +163,8 @@ class Article:
         self.also = []             # مصادر أخرى نشرت الخبر نفسه
         self.tok_ar = None
         self.tok_orig = set()
+        self.section = "saudi"    # saudi أو gulf
+        self.subjects = []         # الدول الخليجية التي يتناولها الخبر
 
     def all_text(self) -> str:
         return (self.title + " " + (self.title_ar or "")).strip()
@@ -419,19 +422,22 @@ def parse_gdelt_items(items, cfg):
     return out
 
 
-def fetch_gdelt(cfg, deadline):
+def fetch_gdelt(cfg, deadline, queries=None):
+    """queries: قائمة (اسم، نص الاستعلام). الافتراضي: استعلام السعودية لكل لغة."""
     gd = cfg.get("gdelt", {})
     if not gd.get("enabled", True):
         return [], {}, ("skip", "")
+    if queries is None:
+        base = gd.get("query_terms", '"Saudi Arabia" OR Riyadh')
+        queries = [(lang, f"{base} sourcelang:{lang}") for lang in gd.get("languages", ["english", "arabic"])]
     out, counts = [], {}
     ok = attempted = 0
     detail = ""
-    for lang in gd.get("languages", ["english", "arabic"]):
+    for lang, query in queries:
         if time.monotonic() > deadline:
             break
         attempted += 1
-        query = gd.get("query_terms", '"Saudi Arabia" OR Riyadh')
-        url = "https://api.gdeltproject.org/api/v2/doc/doc?query=" + quote_plus(f'{query} sourcelang:{lang}') + f'&mode=artlist&format=json&maxrecords={gd.get("maxrecords", 60)}&sort=datedesc&timespan={gd.get("timespan", "2h")}'
+        url = "https://api.gdeltproject.org/api/v2/doc/doc?query=" + quote_plus(query) + f'&mode=artlist&format=json&maxrecords={gd.get("maxrecords", 60)}&sort=datedesc&timespan={gd.get("timespan", "2h")}'
         r = http_get(url, timeout=30)
         counts[f"gdelt:{lang}"] = 0
         if r is None or r.status_code != 200:
@@ -589,7 +595,8 @@ def parse_gnews_rss(xml_bytes, edition):
     return out
 
 
-def fetch_gnews(cfg, deadline):
+def fetch_gnews(cfg, deadline, query_for=None, label="gnews"):
+    """query_for: دالة تعطي نص البحث لكل نسخة (أو None لتخطيها). الافتراضي: استعلام السعودية."""
     gn = cfg.get("google_news", {})
     if not gn.get("enabled", True):
         return [], {}, ("skip", "")
@@ -600,10 +607,12 @@ def fetch_gnews(cfg, deadline):
     for ed in gn.get("editions", []):
         if time.monotonic() > deadline:
             break
+        q = query_for(ed) if query_for else ed.get("query", '"Saudi Arabia"')
+        if not q:
+            continue
         attempted += 1
-        key = f'gnews:{ed.get("lang")}-{ed.get("gl")}'
+        key = f'{label}:{ed.get("hl")}-{ed.get("gl")}'
         counts[key] = 0
-        q = ed.get("query", '"Saudi Arabia"')
         if recency:
             q = f"{q} when:{recency}"
         url = f'https://news.google.com/rss/search?q={quote_plus(q)}&hl={ed.get("hl", "en-US")}&gl={ed.get("gl", "US")}&ceid={quote_plus(ed.get("ceid", "US:en"))}'
@@ -619,6 +628,20 @@ def fetch_gnews(cfg, deadline):
         counts[key] = len(items)
         out.extend(items)
     return out, counts, _status(ok, attempted, detail)
+
+
+def fetch_gulf_gnews(cfg, deadline):
+    if not (cfg.get("gulf", {}) or {}).get("enabled", True):
+        return [], {}, ("skip", "")
+    return fetch_gnews(cfg, deadline, query_for=gulf.query_for, label="gulf-gnews")
+
+
+def fetch_gulf_gdelt(cfg, deadline):
+    g = cfg.get("gulf", {}) or {}
+    if not g.get("enabled", True) or not g.get("gdelt", True):
+        return [], {}, ("skip", "")
+    queries = [(f"gulf-{iso}", q) for iso, q in gulf.GDELT_QUERIES.items()]
+    return fetch_gdelt(cfg, deadline, queries=queries)
 
 
 # ---------------------------------------------------------------- الحالة
@@ -794,37 +817,71 @@ def unique_sources(article: Article) -> list:
     return out
 
 
+TOPIC_EMOJI = {"politics": "🏛", "economy": "💰", "energy": "🛢", "tourism": "✈️", "sports": "⚽", "technology": "💻",
+               "culture": "🎭", "religion": "🕋", "real_estate": "🏗", "regional": "🌍", "security": "🛡", "general": "🗞"}
+GULF_FLAGS = {"AE": "🇦🇪", "QA": "🇶🇦", "KW": "🇰🇼", "BH": "🇧🇭", "OM": "🇴🇲"}
+LINE = "━━━━━━━━━━━━"
+_SAUDI_WORD = re.compile(r"(?<!\w)(?:[وفبلك]|لل|ال|وال|بال)*سعودي\w*|(?<!\w)saudis?(?!\w)", re.I | re.U)
+
+
+def highlight_saudi(escaped_text: str) -> str:
+    """يميّز كلمة "السعودية" ومشتقاتها: دائرة خضراء قبل أول ورود، وخط تحت كل ورود.
+
+    تلقرام لا يدعم تلوين النص، فالدائرة الخضراء والخط هما البديل المتاح.
+    """
+    state = {"first": True}
+
+    def mark(match):
+        dot = "🟢" if state["first"] else ""
+        state["first"] = False
+        return f"{dot}<u>{match.group(0)}</u>"
+
+    return _SAUDI_WORD.sub(mark, escaped_text)
+
+
 def format_message(article: Article, cfg: dict) -> str:
     published_riyadh = publication_datetime_riyadh(article)
     shown_ar = article.title_ar if article.translated else None
+    is_gulf = article.section == "gulf"
+    mark = (lambda text: text) if is_gulf else highlight_saudi
+    when = "🕒 " + published_riyadh.strftime("%Y-%m-%d • %H:%M") + " (الرياض)" if published_riyadh else ""
     lines = []
-    if published_riyadh:
-        lines.append("📅 تاريخ النشر: " + published_riyadh.strftime("%Y-%m-%d"))
     if article.origin == "x":
-        lines.append("𝕏 منشور جديد")
+        lines += ["🇸🇦 <b>منشور على 𝕏</b>", LINE]
         if shown_ar:
-            lines.append(f"🔁 <i>{html.escape(shown_ar[:1000])}</i>")
-            lines.append(f"🔤 <b>{html.escape(article.title[:1000])}</b>")
+            lines.append(f"<b>{mark(html.escape(shown_ar[:1000]))}</b>")
+            lines.append("")
+            lines.append(f"🔤 <i>{html.escape(article.title[:1000])}</i>")
         else:
-            lines.append(f"<b>{html.escape(article.title[:1000])}</b>")
+            lines.append(f"<b>{mark(html.escape(article.title[:1000]))}</b>")
+        lines.append(LINE)
         lines.append(f"👤 {html.escape(article.source_name)}")
-        if published_riyadh:
-            lines.append("🕒 " + published_riyadh.strftime("%H:%M") + " (الرياض)")
+        if when:
+            lines.append(when)
         lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">عرض المنشور</a>')
         lines.append("#إكس")
         return "\n".join(lines)
 
     breaking = cfg.get("breaking_mode", False) and article.breaking_score >= cfg.get("breaking_threshold", 78)
     label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "⚪ مصدر آخر")
-    lines.append("🚨 BREAKING NEWS" if breaking else "📰 خبر جديد")
-    if shown_ar:
-        lines.append(f"🔁 <b>{html.escape(shown_ar[:200])}</b>")
+    topic_line = f"{TOPIC_EMOJI.get(article.topic, '🗞')} <b>{TOPIC_LABELS.get(article.topic, 'عام')}</b>"
+    if is_gulf:
+        flags = " ".join(GULF_FLAGS[i] for i in article.subjects)
+        names = "، ".join(gulf.NAMES_AR[i] for i in article.subjects)
+        lines.append(f"{flags} <b>خبر خليجي — {names}</b>")
+    elif breaking:
+        lines.append("🚨🇸🇦 <b>عاجل</b>")
+    else:
+        lines.append("🇸🇦 <b>خبر عن 🟢 السعودية</b>")
+    lines.append(LINE)
+    main_title = shown_ar or article.title
+    lines.append(f"📰 <b>{mark(html.escape(main_title[:200]))}</b>")
     if article.summary:
-        lines.append(f"📝 {html.escape(article.summary)}")
-    lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>')
-    original_title = html.escape(article.title[:200])
-    lines.append(f"🔤 <i>{original_title}</i>" if shown_ar else f"<b>{original_title}</b>")
-    lines.append(f"📌 <b>{TOPIC_LABELS.get(article.topic, 'عام')}</b> • {article.breaking_score} نقطة • {label}")
+        lines += ["", f"<blockquote>📝 {mark(html.escape(article.summary))}</blockquote>"]
+    if shown_ar:
+        lines += ["", f"🔤 <i>{html.escape(article.title[:200])}</i>"]
+    lines.append(LINE)
+    lines.append(f"{topic_line}  •  ⭐ {article.breaking_score}  •  {label}")
     if article.tone in TONES:
         lines.append(f"{TONE_EMOJI[article.tone]} النبرة: {TONES[article.tone]}")
     lines.append(f"🏛 {html.escape(article.source_name or article.domain)}")
@@ -833,17 +890,23 @@ def format_message(article: Article, cfg: dict) -> str:
         if article.region != "unknown":
             place += " — " + geo.region_label(article.region)
         lines.append(f"🌐 {place}")
-    if published_riyadh:
-        lines.append("🕒 " + published_riyadh.strftime("%H:%M") + " (الرياض)")
+    if when:
+        lines.append(when)
+    lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر كاملًا</a>')
     others = unique_sources(article)
     if others:
         links = [f'<a href="{html.escape(o.url, quote=True)}">{html.escape(o.source_name[:40])}</a>' for o in others[:4]]
         extra = f" و{len(others) - 4} غيرها" if len(others) > 4 else ""
         lines.append("📎 نشره أيضًا: " + "، ".join(links) + extra)
-    tags = [hashtag(TOPIC_TAGS.get(article.topic, "عام")), hashtag(article.country_tag)]
-    if article.region != "unknown":
-        tags.append(hashtag(geo.region_label(article.region)))
-    lines.append(" ".join(t for t in tags if t))
+    if is_gulf:
+        # وسوم الخبر الخليجي تدل على الدولة موضوع الخبر، لا على دولة المصدر
+        tags = ["#الخليج"] + [hashtag("أخبار " + gulf.NAMES_AR[i]) for i in article.subjects]
+        tags.append(hashtag(TOPIC_TAGS.get(article.topic, "عام")))
+    else:
+        tags = [hashtag(TOPIC_TAGS.get(article.topic, "عام")), hashtag(article.country_tag)]
+        if article.region != "unknown":
+            tags.append(hashtag(geo.region_label(article.region)))
+    lines += ["", " ".join(t for t in tags if t)]
     return "\n".join(lines)
 
 
@@ -862,14 +925,17 @@ def apply_saudi_focus(cfg: dict) -> dict:
 
 
 # ---------------------------------------------------------------- الاختيار
-def prefilter(articles, cfg, state, pats, now=None):
-    """يبقي الحديث، المطابق للكلمات السعودية، غير المرسل سابقًا، بلا تكرار حرفي."""
+def prefilter(articles, cfg, state, pats, now=None, match=None):
+    """يبقي الحديث، المطابق لكلمات القسم، غير المرسل سابقًا، بلا تكرار حرفي."""
     max_age = cfg.get("max_age_hours", 24)
     out, seen = [], set()
     for article in articles:
         if not is_recent(article, max_age, now):
             continue
-        if cfg.get("strict_title_filter", True) and not title_matches(article.title, pats):
+        if match is not None:
+            if not match(article):
+                continue
+        elif cfg.get("strict_title_filter", True) and not title_matches(article.title, pats):
             continue
         dedupe = "d" + h(norm_title(article.title)[:180])
         if article.uid in seen or dedupe in seen or state.seen_article(article):
@@ -946,9 +1012,17 @@ def select_clusters(clusters, cfg):
     caps = cfg.get("max_per_language_overrides", {}) or {}
     lang_counts, picked = {}, []
 
+    subject_cap = cfg.get("max_per_subject", 0)
+    subject_counts = {}
+
+    def subject_full(article):
+        return bool(subject_cap and article.subjects and subject_counts.get(article.subjects[0], 0) >= subject_cap)
+
     def take(article):
         picked.append(article)
         lang_counts[article.lang] = lang_counts.get(article.lang, 0) + 1
+        if article.subjects:
+            subject_counts[article.subjects[0]] = subject_counts.get(article.subjects[0], 0) + 1
 
     regions_cfg = cfg.get("regions", {}) or {}
     per_region = int(regions_cfg.get("min_per_run", 1))
@@ -959,14 +1033,14 @@ def select_clusters(clusters, cfg):
             for article in news:
                 if quota <= 0 or got >= per_region:
                     break
-                if article.region == region and article not in picked:
+                if article.region == region and article not in picked and not subject_full(article):
                     take(article)
                     got += 1
                     quota -= 1
     for article in news:
         if len(picked) >= slots:
             break
-        if article in picked:
+        if article in picked or subject_full(article):
             continue
         if lang_counts.get(article.lang, 0) >= caps.get(article.lang, default_cap):
             continue
@@ -1008,21 +1082,29 @@ def maybe_send_digests(cfg: dict, state: State, tg: Telegram, archive: Archive, 
         return
     today = now.date().isoformat()
     done = state.data["digest"]
-    region_labels = dict(geo.REGIONS_AR)
+    top_n = int(d.get("top_n", 10))
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    sections = [("saudi", "موجز اليوم", "الموجز الأسبوعي"), ("gulf", "موجز الخليج اليوم", "موجز الخليج الأسبوعي")]
+
+    def send(records, heading):
+        ok = True
+        for section, _, _ in sections:
+            part = [r for r in records if r.get("section", "saudi") == section]
+            title = heading[section]
+            text = build_digest(part, title, top_n, TOPIC_LABELS, dict(geo.REGIONS_AR), TONES, gulf.NAMES_AR)
+            if text is not None and not tg.send_text(text):
+                ok = False
+        return ok
+
     if done.get("daily") != today:
-        text = build_digest(archive.load_since(midnight), f"موجز اليوم — {today}", int(d.get("top_n", 10)),
-                            TOPIC_LABELS, region_labels, TONES)
-        if text is None or tg.send_text(text):
+        if send(archive.load_since(midnight), {s: f"{daily} — {today}" for s, daily, _ in sections}):
             done["daily"] = today
     if now.weekday() == int(d.get("weekly_day", 4)) and done.get("weekly") != today:
         start = midnight - dt.timedelta(days=6)
         week = archive.load_since(start)
         if not week or min(r.get("ts", 0) for r in week) > (midnight - dt.timedelta(days=3)).timestamp():
             week = []  # الأرشيف لم يغطِّ أسبوعًا بعد (أول أيام التشغيل): لا موجز أسبوعي
-        text = build_digest(week, f"الموجز الأسبوعي — {start.date().isoformat()} إلى {today}",
-                            int(d.get("top_n", 10)), TOPIC_LABELS, region_labels, TONES)
-        if text is None or tg.send_text(text):
+        if send(week, {s: f"{weekly} — {start.date().isoformat()} إلى {today}" for s, _, weekly in sections}):
             done["weekly"] = today
 
 
@@ -1042,60 +1124,38 @@ def archive_record(article: Article) -> dict:
         "score": article.breaking_score,
         "origin": article.origin,
         "also": len(unique_sources(article)),
+        "section": article.section,
+        "subject": article.subjects[0] if article.subjects else "",
     }
 
 
 # ---------------------------------------------------------------- التشغيل
-def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archive: Archive | None = None,
-        now: dt.datetime | None = None, fetchers=None, limit: int = 0) -> int:
-    cfg = dict(cfg)
-    if breaking:
-        cfg["breaking_mode"] = True
-        cfg["breaking_threshold"] = cfg.get("breaking_threshold", 78)
-        cfg["strict_title_filter"] = True
-        cfg["max_messages_per_run"] = cfg.get("breaking_max_messages", 4)
-        cfg["max_per_language"] = cfg.get("breaking_per_language", 2)
-        cfg["gdelt"] = {**cfg.get("gdelt", {}), "timespan": "1h", "maxrecords": 80}
-    if fast:
-        cfg["max_messages_per_run"] = cfg.get("fast_max_messages", 10)
-    if limit:
-        cfg["max_messages_per_run"] = int(limit)
-        cfg["test_latest"] = True
-    cfg = apply_saudi_focus(cfg)
-    archive = archive or Archive(ARCHIVE_DIR)
-    now = now or dt.datetime.now(RIYADH)
+GULF = gulf.Matcher(compile_terms)
 
-    deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
-    articles, counts, statuses = [], {}, {}
-    for name, fetch in (fetchers or {"x": fetch_x, "gnews": fetch_gnews, "gdelt": fetch_gdelt}).items():
-        found, c, status = fetch(cfg, deadline)
-        articles.extend(found)
-        counts.update(c)
-        statuses[name] = status
 
-    pats = compile_terms(cfg.get("title_must_match_any", []))
-    candidates = prefilter(articles, cfg, state, pats, now)
+def build_stories(articles, cfg, state, pats, deadline, now, match=None):
+    """من المقالات الخام إلى أخبار جاهزة للاختيار: تصفية، ترجمة، نقاط، دمج المكرر، حذف ما سبق نشره."""
+    candidates = prefilter(articles, cfg, state, pats, now, match)
     add_arabic_titles(candidates, cfg, state, deadline)
     candidates = score_and_focus(candidates, cfg, pats, now)
     candidates.sort(key=lambda a: (a.origin != "x",) + sort_key(a, cfg))
 
     dedupe_cfg = cfg.get("dedupe", {}) or {}
     threshold = float(dedupe_cfg.get("similarity", 0.6))
-    clusters = cluster_articles(candidates, threshold)
-
-    # خبر سبق نشره من مصدر آخر خلال اليومين الماضيين: لا يُعاد
     known = state.recent_stories(float(dedupe_cfg.get("memory_hours", 48)))
     fresh = []
-    for rep in clusters:
+    for rep in cluster_articles(candidates, threshold):
         tokens = rep.tok_ar or set()
+        # خبر سبق نشره من مصدر آخر خلال اليومين الماضيين: لا يُعاد
         if rep.origin != "x" and tokens and any(jaccard(tokens, old) >= threshold for old in known):
             for member in [rep] + rep.also:
                 state.mark(member)
             continue
         fresh.append(rep)
+    return fresh
 
-    chosen = select_clusters(fresh, cfg)
-    ai = AIEnricher(cfg, state.data, now.date().isoformat(), [t for t in TOPIC_LABELS])
+
+def send_stories(chosen, cfg, state, tg, archive, ai, deadline) -> int:
     sent = 0
     for article in chosen:
         if article.origin != "x" and ai.available() and time.monotonic() < deadline:
@@ -1116,14 +1176,84 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
             sent += 1
         if not tg.dry_run:
             time.sleep(2)
+    return sent
+
+
+def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archive: Archive | None = None,
+        now: dt.datetime | None = None, fetchers=None, limit: int = 0) -> int:
+    cfg = dict(cfg)
+    gulf_cfg = cfg.get("gulf", {}) or {}
+    gulf_max = gulf_cfg.get("max_messages_per_run", 10)
+    if breaking:
+        cfg["breaking_mode"] = True
+        cfg["breaking_threshold"] = cfg.get("breaking_threshold", 78)
+        cfg["strict_title_filter"] = True
+        cfg["max_messages_per_run"] = cfg.get("breaking_max_messages", 4)
+        cfg["max_per_language"] = cfg.get("breaking_per_language", 2)
+        cfg["gdelt"] = {**cfg.get("gdelt", {}), "timespan": "1h", "maxrecords": 80}
+    if fast:
+        cfg["max_messages_per_run"] = cfg.get("fast_max_messages", 10)
+        gulf_max = gulf_cfg.get("fast_max_messages", 6)
+    if limit:
+        cfg["max_messages_per_run"] = gulf_max = int(limit)
+        cfg["test_latest"] = True
+    cfg = apply_saudi_focus(cfg)
+    archive = archive or Archive(ARCHIVE_DIR)
+    now = now or dt.datetime.now(RIYADH)
+
+    deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
+    default_fetchers = {"x": fetch_x, "gnews": fetch_gnews, "gulf_gnews": fetch_gulf_gnews,
+                        "gdelt": fetch_gdelt, "gulf_gdelt": fetch_gulf_gdelt}
+    articles, counts, statuses = [], {}, {}
+    for name, fetch in (fetchers or default_fetchers).items():
+        found, c, status = fetch(cfg, deadline)
+        articles.extend(found)
+        counts.update(c)
+        # المصدر الواحد (مثل أخبار Google) يُعدّ سليمًا إذا نجح أحد طلبيه السعودي أو الخليجي
+        source = name.replace("gulf_", "")
+        previous = statuses.get(source)
+        if previous is None or status[0] == "ok" or previous[0] == "skip":
+            statuses[source] = status
+
+    ai = AIEnricher(cfg, state.data, now.date().isoformat(), [t for t in TOPIC_LABELS])
+
+    # ---- القسم الأول: أخبار السعودية
+    pats = compile_terms(cfg.get("title_must_match_any", []))
+    saudi = build_stories(articles, cfg, state, pats, deadline, now)
+    sent = send_stories(select_clusters(saudi, cfg), cfg, state, tg, archive, ai, deadline)
+
+    # ---- القسم الثاني: أخبار الخليج، دفعة مستقلة بحصتها الخاصة
+    gulf_sent = 0
+    gulf_stories = []
+    if gulf_cfg.get("enabled", True):
+        def is_gulf(article):
+            if article.origin == "x" or title_matches(article.title, pats):
+                return False  # ما يذكر السعودية مكانه قسم السعودية
+            article.subjects = GULF.subjects(article.title, article.lang)
+            if article.subjects:
+                article.section = "gulf"
+            return bool(article.subjects)
+
+        gcfg = {**cfg, "saudi_focus": False, "max_messages_per_run": gulf_max,
+                "max_per_subject": gulf_cfg.get("max_per_country", 3)}
+        gulf_stories = build_stories(articles, gcfg, state, GULF.patterns, deadline, now, match=is_gulf)
+        chosen = select_clusters(gulf_stories, gcfg)
+        if chosen:
+            tg.send_text("🌴 ━━━━ <b>أخبار الخليج</b> ━━━━ 🌴\n🇦🇪 الإمارات • 🇶🇦 قطر • 🇰🇼 الكويت • 🇧🇭 البحرين • 🇴🇲 عُمان")
+            gulf_sent = send_stories(chosen, gcfg, state, tg, archive, ai, deadline)
 
     if not cfg.get("test_latest"):
         check_health(statuses, cfg, state, tg)
         maybe_send_digests(cfg, state, tg, archive, now)
-    logging.info("collected=%d candidates=%d stories=%d sent=%d sources=%s ai_calls_today=%s",
-                 len(articles), len(candidates), len(fresh), sent,
+    logging.info("collected=%d saudi_stories=%d sent=%d gulf_stories=%d gulf_sent=%d sources=%s ai_calls_today=%s",
+                 len(articles), len(saudi), sent, len(gulf_stories), gulf_sent,
                  {k: v[0] for k, v in statuses.items()}, state.data["ai"].get("calls", 0))
-    return sent
+    ok_counts = {}
+    for key, value in counts.items():
+        group = key.split(":")[0]
+        ok_counts[group] = ok_counts.get(group, 0) + value
+    logging.info("articles per source: %s", ok_counts)
+    return sent + gulf_sent
 
 
 def main():

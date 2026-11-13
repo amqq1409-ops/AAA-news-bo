@@ -6,7 +6,7 @@ max_per_language_overrides:
   en: 6
 include_other_tier: true
 strict_title_filter: true
-total_time_budget_sec: 1000
+total_time_budget_sec: 1200
 translate_titles: true
 # يُنشر ما نُشر خلال آخر كذا ساعة (بدل "نفس اليوم")
 max_age_hours: 24
@@ -23,6 +23,14 @@ regions:
   min_per_run: 1
   quota_share: 0.5
   priority: [east_asia, southeast_asia, south_asia, central_asia, africa, latin_america, oceania, mideast, europe, north_america, arab]
+
+# أخبار الخليج (الإمارات، قطر، الكويت، البحرين، عُمان): دفعة مستقلة بعد أخبار السعودية في القناة نفسها
+gulf:
+  enabled: true
+  max_messages_per_run: 10    # في الفحص الكامل كل ساعة
+  fast_max_messages: 6        # في الفحص السريع
+  max_per_country: 3          # حتى لا تطغى دولة واحدة على الدفعة
+  gdelt: true
 
 # الموجز اليومي والأسبوعي (بتوقيت الرياض). weekly_day: الاثنين=0 ... الجمعة=4 ... الأحد=6
 digest:

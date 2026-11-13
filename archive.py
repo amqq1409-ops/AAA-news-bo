@@ -65,7 +65,7 @@ def _count_lines(title: str, counter: collections.Counter, labels: dict | None =
 
 
 def build_digest(records: list[dict], heading: str, top_n: int, topic_labels: dict, region_labels: dict,
-                 tone_labels: dict) -> str | None:
+                 tone_labels: dict, subject_labels: dict | None = None) -> str | None:
     news = [r for r in records if r.get("origin") != "x"]
     if not records:
         return None
@@ -81,6 +81,8 @@ def build_digest(records: list[dict], heading: str, top_n: int, topic_labels: di
             tail += f" +{rec['also']}"
         lines.append(f'{i}. <a href="{html.escape(rec.get("url", ""), quote=True)}">{html.escape(title)}</a> — {tail}')
 
+    subjects = collections.Counter(r["subject"] for r in news if r.get("subject"))
+    lines += _count_lines("حسب الدولة", subjects, subject_labels)
     lines += _count_lines("حسب المنطقة", collections.Counter(r.get("region") or "unknown" for r in news), region_labels, top=11)
     lines += _count_lines("حسب الموضوع", collections.Counter(r.get("topic") or "general" for r in news), topic_labels)
     tones = collections.Counter(r["tone"] for r in news if r.get("tone"))
