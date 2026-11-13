@@ -889,7 +889,7 @@ def format_message(article: Article, cfg: dict) -> str:
         place = html.escape(article.country_ar)
         if article.region != "unknown":
             place += " — " + geo.region_label(article.region)
-        lines.append(f"🌐 {place}")
+        lines.append(f"{geo.flag(article.iso) or '🌐'} {place}")
     if when:
         lines.append(when)
     lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر كاملًا</a>')

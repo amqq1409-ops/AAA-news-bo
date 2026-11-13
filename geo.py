@@ -231,3 +231,16 @@ def by_domain(domain: str):
 
 def region_label(region: str) -> str:
     return REGIONS_AR.get(region or "unknown", REGIONS_AR["unknown"])
+
+
+def flag(code: str) -> str:
+    """علم الدولة (إيموجي) من رمزها المكوّن من حرفين، أو نص فارغ."""
+    code = (code or "").strip().upper()
+    if len(code) != 2 or not code.isalpha() or not code.isascii():
+        return ""
+    return "".join(chr(0x1F1E6 + ord(letter) - ord("A")) for letter in code)
+
+
+def flag_for_name(name: str) -> str:
+    info = by_name(name)
+    return flag(info[0]) if info else ""

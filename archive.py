@@ -5,6 +5,8 @@ import collections
 import datetime as dt
 import html
 import json
+
+import geo
 from pathlib import Path
 
 RIYADH = dt.timezone(dt.timedelta(hours=3))
@@ -90,7 +92,9 @@ def build_digest(records: list[dict], heading: str, top_n: int, topic_labels: di
     if tones:
         critical_by_region = collections.Counter(r.get("region") or "unknown" for r in news if r.get("tone") == "critical")
         lines += _count_lines("أكثر المناطق نقدًا", critical_by_region, region_labels, top=3)
-    lines += _count_lines("أكثر الدول تغطية", collections.Counter(r["country"] for r in news if r.get("country")), top=8)
+    countries = collections.Counter(r["country"] for r in news if r.get("country"))
+    flags = {name: f"{geo.flag_for_name(name)} {name}".strip() for name in countries}
+    lines += _count_lines("أكثر الدول تغطية", countries, flags, top=8)
     text = "\n".join(lines)
     while len(text) > 3900 and len(lines) > 4:  # حد تلقرام 4096 حرفًا
         lines.pop()

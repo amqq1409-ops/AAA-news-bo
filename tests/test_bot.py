@@ -197,7 +197,7 @@ class MessageTests(unittest.TestCase):
         a.topic, a.summary, a.tone = "energy", "ملخص من جملتين.", "positive"
         msg = nb.format_message(a, CFG)
         self.assertIn("#طاقة #اليابان #شرق_آسيا", msg)
-        self.assertIn("اليابان — شرق آسيا", msg)
+        self.assertIn("🇯🇵 اليابان — شرق آسيا", msg)
         self.assertIn("📝 ملخص من جملتين.", msg)
         self.assertIn("أرامكو 🟢<u>السعودية</u> وتويوتا", msg)
         self.assertIn("🟢 النبرة: إيجابي", msg)
@@ -210,6 +210,13 @@ class MessageTests(unittest.TestCase):
         self.assertEqual(out.count("<u>"), 3)          # والخط تحت كل ورود
         self.assertIn("🟢<u>السعودي</u>", out)
         self.assertEqual(nb.highlight_saudi("أخبار قطر"), "أخبار قطر")
+
+    def test_flags(self):
+        self.assertEqual(geo.flag("sa"), "🇸🇦")
+        self.assertEqual(geo.flag_for_name("كينيا"), "🇰🇪")
+        self.assertEqual(geo.flag(""), "")
+        unknown = art("Saudi Arabia news item", "example.com")
+        self.assertIn("🏛 example.com", nb.format_message(unknown, CFG))
 
     def test_hashtag(self):
         self.assertEqual(nb.hashtag("عُمان"), "#عمان")
