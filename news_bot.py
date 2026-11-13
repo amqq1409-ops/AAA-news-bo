@@ -44,6 +44,8 @@ TRACKING = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content
 # النجمة في آخر الكلمة الإنجليزية تعني "وما يبدأ بها".
 TOPIC_KEYWORDS = {
     "sports": ["رياضة", "رياضي", "كرة القدم", "كرة", "دوري", "مباراة", "بطولة", "كأس", "نادي", "لاعب", "مدرب",
+               "منتخب", "تصفيات", "ملعب", "مهاجم", "حارس مرمى", "هدف", "أهداف", "سباق", "national team", "qualifier*",
+               "goal", "goals", "striker", "trophy", "race", "racing",
                "مونديال", "كأس العالم", "فورمولا", "ملاكمة", "غولف", "تنس", "رونالدو", "الهلال", "أولمبي",
                "football", "soccer", "league", "match", "cup", "club", "player", "coach", "fifa", "world cup",
                "formula 1", "f1", "grand prix", "boxing", "golf", "tennis", "ronaldo", "al hilal", "al nassr",

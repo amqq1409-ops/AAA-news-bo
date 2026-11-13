@@ -84,6 +84,7 @@ class TopicTests(unittest.TestCase):
         self.assertEqual(nb.classify_topic("Saudi Arabia and Kenya sign labour agreement"), "economy")
         self.assertEqual(nb.classify_topic("Al Hilal beat Al Nassr in Saudi Pro League match"), "sports")
         self.assertEqual(nb.classify_topic("Pilgrims arrive in Makkah for Umrah"), "religion")
+        self.assertEqual(nb.classify_topic("منتخب كوريا الجنوبية يخسر أمام السعودية لأول مرة منذ 21 عاماً بسبب انهيار الدفاع"), "sports")
         self.assertEqual(nb.classify_topic("Saudi Arabia to build AI data center with chips"), "technology")
 
 
