@@ -38,6 +38,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
           GOOGLE_TRANSLATE_API_KEY: ${{ secrets.GOOGLE_TRANSLATE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           ARGS=""
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
@@ -45,11 +47,14 @@ jobs:
           python news_bot.py $ARGS
 
       - name: Save state
+        # لا حفظ في التشغيل التجريبي، ولا من أي فرع غير main
+        if: github.ref == 'refs/heads/main' && inputs.dry_run != true
         run: |
           set -euo pipefail
           git config user.name  "news-bot"
           git config user.email "news-bot@users.noreply.github.com"
-          git add data/state.json
+          mkdir -p data/archive
+          git add data/state.json data/archive
           if git diff --cached --quiet; then
             exit 0
           fi
@@ -85,7 +90,7 @@ jobs:
           path.write_text(json.dumps(local, ensure_ascii=False, indent=2), encoding="utf-8")
           PY
             git reset --mixed origin/main
-            git add data/state.json
+            git add data/state.json data/archive
             if git diff --cached --quiet; then
               exit 0
             fi
