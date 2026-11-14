@@ -1,9 +1,56 @@
 max_messages_per_run: 20
+# حد الأخبار لكل لغة في الفحص الواحد، مع استثناء للغات الأكثر أخبارًا
 max_per_language: 2
+max_per_language_overrides:
+  ar: 6
+  en: 6
 include_other_tier: true
 strict_title_filter: true
-total_time_budget_sec: 1000
+total_time_budget_sec: 1200
 translate_titles: true
+# يُنشر ما نُشر خلال آخر كذا ساعة (بدل "نفس اليوم")
+max_age_hours: 24
+# أقصى عدد من الأخبار الجديدة يُترجم ويُفحص في الفحص الواحد
+max_candidates: 80
+
+# كشف الخبر المكرر: نسبة تشابه العنوانين (0.6 = 60% من الكلمات مشتركة)
+dedupe:
+  similarity: 0.6
+  memory_hours: 48
+
+# توازن المناطق: خبر واحد على الأقل لكل منطقة فيها جديد، بما لا يتجاوز نصف الرسائل
+regions:
+  min_per_run: 1
+  quota_share: 0.5
+  priority: [east_asia, southeast_asia, south_asia, central_asia, africa, latin_america, oceania, mideast, europe, north_america, arab]
+
+# أخبار الخليج (الإمارات، قطر، الكويت، البحرين، عُمان): دفعة مستقلة بعد أخبار السعودية في القناة نفسها
+gulf:
+  enabled: true
+  max_messages_per_run: 10    # في الفحص الكامل كل ساعة
+  fast_max_messages: 6        # في الفحص السريع
+  max_per_country: 3          # حتى لا تطغى دولة واحدة على الدفعة
+  gdelt: true
+
+# الموجز اليومي والأسبوعي (بتوقيت الرياض). weekly_day: الاثنين=0 ... الجمعة=4 ... الأحد=6
+digest:
+  enabled: true
+  hour: 21
+  top_n: 10
+  weekly_day: 4
+
+# تنبيه في القناة إذا تعطل مصدر هذا العدد من الساعات المتواصلة
+health:
+  alert_after_hours: 3
+
+# الملخص العربي وتصنيف النبرة: يعمل فقط بعد إضافة GEMINI_API_KEY أو ANTHROPIC_API_KEY في أسرار المستودع
+ai:
+  enabled: true
+  provider: auto            # auto | gemini | anthropic
+  gemini_model: auto        # auto يختار أحدث نموذج Flash متاح
+  anthropic_model: claude-haiku-5-5
+  max_calls_per_day: 300    # سقف يومي يحمي من أي تكلفة غير متوقعة
+  fetch_article_text: true
 
 gdelt:
   enabled: true
@@ -16,6 +63,7 @@ x:
   enabled: true
   lookback_minutes: 180
   max_results: 100
+  max_per_run: 5            # أقصى عدد منشورات X في الفحص الواحد (لا تُحسب من حد اللغة)
   accounts:
     - JasonMBrodsky
     - CB_Cotton
@@ -68,7 +116,7 @@ x:
     - OrenCNN
     - kgreifeld
     - HQNewsNow
-    - AlejandraJMillо
+    - AlejandraJMillo
     - FirstSquawk
     - DPsaledakis
     - farnazfassihi
@@ -155,7 +203,7 @@ x:
 
 google_news:
   enabled: true
-  when: "3h"
+  recency: "1d"             # يطلب من أخبار Google ما نُشر خلال يوم واحد فقط
   editions:
     - {lang: en, hl: "en-US", gl: "US", ceid: "US:en", country_ar: "أمريكا", query: '"Saudi Arabia" OR Riyadh'}
     - {lang: en, hl: "en-GB", gl: "GB", ceid: "GB:en", country_ar: "بريطانيا", query: '"Saudi Arabia" OR Riyadh'}
@@ -285,6 +333,7 @@ title_must_match_any:
   - סעודית
   - ריאד
   - السعود
+  - سعودي
   - أرامكو
   - نيوم
   - بن سلمان
@@ -319,7 +368,7 @@ title_must_match_any:
   - սաուդ
   - საუდ
   - saudí
-  - ksa
+  - =ksa
 
 languages_ar:
   ar: "العربية"
@@ -364,84 +413,3 @@ languages_ar:
   no: "النرويجية"
   da: "الدنماركية"
   fi: "الفنلندية"
-
-countries_ar:
-  "united states": "أمريكا"
-  "united kingdom": "بريطانيا"
-  "france": "فرنسا"
-  "germany": "ألمانيا"
-  "spain": "إسبانيا"
-  "italy": "إيطاليا"
-  "russia": "روسيا"
-  "china": "الصين"
-  "japan": "اليابان"
-  "south korea": "كوريا الجنوبية"
-  "turkey": "تركيا"
-  "iran": "إيران"
-  "pakistan": "باكستان"
-  "india": "الهند"
-  "indonesia": "إندونيسيا"
-  "brazil": "البرازيل"
-  "saudi arabia": "السعودية"
-  "united arab emirates": "الإمارات"
-  "qatar": "قطر"
-  "egypt": "مصر"
-  "israel": "إسرائيل"
-  "canada": "كندا"
-  "australia": "أستراليا"
-  "kuwait": "الكويت"
-  "bahrain": "البحرين"
-  "oman": "عُمان"
-  "jordan": "الأردن"
-  "lebanon": "لبنان"
-  "iraq": "العراق"
-  "malaysia": "ماليزيا"
-  "singapore": "سنغافورة"
-  "portugal": "البرتغال"
-  "switzerland": "سويسرا"
-  "netherlands": "هولندا"
-  "thailand": "تايلاند"
-  "vietnam": "فيتنام"
-  "poland": "بولندا"
-  "ukraine": "أوكرانيا"
-  "greece": "اليونان"
-  "sweden": "السويد"
-  "norway": "النرويج"
-  "denmark": "الدنمارك"
-  "finland": "فنلندا"
-  "czechia": "التشيك"
-  "czech republic": "التشيك"
-  "romania": "رومانيا"
-  "hungary": "المجر"
-  "bulgaria": "بلغاريا"
-  "serbia": "صربيا"
-  "kazakhstan": "كازاخستان"
-  "uzbekistan": "أوزبكستان"
-  "kenya": "كينيا"
-  "nigeria": "نيجيريا"
-  "south africa": "جنوب أفريقيا"
-  "ethiopia": "إثيوبيا"
-  "somalia": "الصومال"
-  "ghana": "غانا"
-  "senegal": "السنغال"
-  "morocco": "المغرب"
-  "algeria": "الجزائر"
-  "tunisia": "تونس"
-  "bangladesh": "بنغلاديش"
-  "nepal": "نيبال"
-  "mexico": "المكسيك"
-  "argentina": "الأرجنتين"
-  "colombia": "كولومبيا"
-  "chile": "تشيلي"
-  "new zealand": "نيوزيلندا"
-  "ireland": "أيرلندا"
-  "belgium": "بلجيكا"
-  "austria": "النمسا"
-  "philippines": "الفلبين"
-  "taiwan": "تايوان"
-  "hong kong": "هونغ كونغ"
-  "ivory coast": "ساحل العاج"
-  "tanzania": "تنزانيا"
-  "uganda": "أوغندا"
-  "sudan": "السودان"
-  "libya": "ليبيا"
