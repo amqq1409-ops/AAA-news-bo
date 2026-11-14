@@ -7014,5 +7014,19 @@
   },
   "warned": {
     "noresults": "2026-10-25"
+  },
+  "tr": {},
+  "stories": [],
+  "health": {
+    "x": {},
+    "gnews": {
+      "fail_since": 1794649719
+    },
+    "gdelt": {}
+  },
+  "digest": {},
+  "ai": {
+    "day": "2026-11-14",
+    "calls": 0
   }
 }
