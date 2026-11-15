@@ -538,3 +538,54 @@ class FreshAndFastTests(unittest.TestCase):
         finally:
             nb.http_get = original
         self.assertEqual((len(items), status[0], len(counts)), (6, "ok", 6))
+
+
+class DirectFeedTests(unittest.TestCase):
+    RSS = b"""<rss><channel>
+      <item><title><![CDATA[Saudi Arabia &amp; Japan sign deal]]></title><link>https://ex.com/a?utm_source=rss</link>
+        <pubDate>Fri, 13 Nov 2026 20:50:00 GMT</pubDate></item>
+      <item><title>No link</title></item></channel></rss>"""
+    ATOM = b"""<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Qatar opens port</title>
+      <link rel="alternate" href="https://ex.org/q"/><updated>2026-11-13T20:55:00Z</updated></entry></feed>"""
+    BROKEN = b"""<rss><\\channel><item><link>https://qna.example/n1</link><title>Saudi minister meets counterpart</title>
+      <pubDate>2026-11-13T20:40:00Z</pubDate></item></rss>"""
+
+    def test_rss_and_atom(self):
+        items = nb.parse_feed(self.RSS, {"name": "Ex", "lang": "en", "iso": "SA"})
+        self.assertEqual(len(items), 1)
+        a = items[0]
+        self.assertEqual((a.title, a.url, a.source_name, a.origin), ("Saudi Arabia & Japan sign deal", "https://ex.com/a", "Ex", "feed"))
+        self.assertEqual(a.published, dt.datetime(2026, 11, 13, 20, 50, tzinfo=dt.timezone.utc))
+        atom = nb.parse_feed(self.ATOM, {"name": "Q", "lang": "en"})
+        self.assertEqual((atom[0].title, atom[0].url), ("Qatar opens port", "https://ex.org/q"))
+        self.assertIsNotNone(atom[0].published)
+
+    def test_broken_xml_is_still_read(self):
+        items = nb.parse_feed(self.BROKEN, {"name": "QNA", "lang": "en"})
+        self.assertEqual([a.title for a in items], ["Saudi minister meets counterpart"])
+        self.assertIsNone(nb.parse_feed(b"<html><body>blocked</body></html>", {"name": "x"}))
+
+    def test_date_without_zone_uses_feed_zone(self):
+        d = nb.parse_feed_date("2026-11-13 23:50:00", 3)
+        self.assertEqual(d.astimezone(dt.timezone.utc).hour, 20)
+
+    def test_pick_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = new_state(tmp)
+            self.assertEqual(nb.pick_mode(CFG, state, 10_000), "full")
+            state.data["runs"] = {"full": 10_000, "wide": 10_000}
+            self.assertEqual(nb.pick_mode(CFG, state, 10_060), "instant")
+            self.assertEqual(nb.pick_mode(CFG, state, 10_000 + 280), "fast")
+            self.assertEqual(nb.pick_mode(CFG, state, 10_000 + 3600), "full")
+
+    def test_instant_run_sends_only_very_recent_with_flash_mark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tg, state = Recorder(), new_state(tmp)
+            items = [art("Saudi Arabia opens new metro line in Riyadh", "arabnews.com", minutes_ago=5, origin="feed"),
+                     art("Saudi Aramco reports quarterly oil profit rise", "reuters.com", minutes_ago=200, origin="feed")]
+            fetchers = {"feeds": lambda c, d: (items, {}, ("ok", ""))}
+            nb.add_arabic_titles.__defaults__ = (fake_translate,)
+            sent = nb.run(CFG, state, tg, archive=Archive(Path(tmp) / "a"), now=NOW, fetchers=fetchers, instant=True)
+            self.assertEqual(sent, 1)
+            self.assertIn("⚡", tg.sent[0])
+            self.assertIn("metro", tg.sent[0])
