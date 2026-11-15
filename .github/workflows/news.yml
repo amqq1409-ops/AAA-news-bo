@@ -12,6 +12,10 @@ on:
         description: "تجربة بدون إرسال لتلقرام"
         type: boolean
         default: false
+      fast:
+        description: "فحص سريع (يستخدمه المنبّه الخارجي كل 5 دقائق)"
+        type: boolean
+        default: false
       limit:
         description: "إرسال تجريبي: أحدث كم خبر؟ (اتركه فارغًا للتشغيل العادي)"
         type: string
@@ -51,6 +55,7 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
           LIMIT="${{ inputs.limit }}"
           if [[ "$LIMIT" =~ ^[0-9]+$ ]] && [ "$LIMIT" -gt 0 ]; then ARGS="$ARGS --limit $LIMIT"; fi
+          if [ "${{ inputs.fast }}" = "true" ]; then ARGS="$ARGS --fast"; fi
           if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "7 * * * *" ]; then ARGS="$ARGS --fast"; fi
           python news_bot.py $ARGS
 
