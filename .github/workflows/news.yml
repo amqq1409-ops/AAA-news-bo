@@ -2,10 +2,8 @@ name: Saudi News Watch
 
 on:
   schedule:
-    # فحص كامل كل ساعة (مع GDELT)
-    - cron: "7 * * * *"
-    # فحص سريع كل 5 دقائق: أخبار فورية
-    - cron: "*/5 * * * *"
+    # جدولة احتياطية فقط؛ التشغيل الفعلي يأتي من المنبّه الخارجي (cron-job.org) كل دقيقة
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -16,6 +14,10 @@ on:
         description: "فحص سريع (يستخدمه المنبّه الخارجي كل 5 دقائق)"
         type: boolean
         default: false
+      mode:
+        description: "نوع الفحص للتجربة: instant أو fast أو full (اتركه فارغًا للتلقائي)"
+        type: string
+        default: ""
       limit:
         description: "إرسال تجريبي: أحدث كم خبر؟ (اتركه فارغًا للتشغيل العادي)"
         type: string
@@ -55,8 +57,13 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
           LIMIT="${{ inputs.limit }}"
           if [[ "$LIMIT" =~ ^[0-9]+$ ]] && [ "$LIMIT" -gt 0 ]; then ARGS="$ARGS --limit $LIMIT"; fi
-          if [ "${{ inputs.fast }}" = "true" ]; then ARGS="$ARGS --fast"; fi
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "7 * * * *" ]; then ARGS="$ARGS --fast"; fi
+          MODE="${{ inputs.mode }}"
+          if [ "$MODE" = "instant" ] || [ "$MODE" = "fast" ]; then
+            ARGS="$ARGS --$MODE"
+          elif [ "$MODE" != "full" ]; then
+            # المنبّه الخارجي (كل دقيقة) والجدولة الاحتياطية: البوت يختار نوع الفحص بنفسه
+            if [ "${{ inputs.fast }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then ARGS="$ARGS --auto"; fi
+          fi
           python news_bot.py $ARGS
 
       - name: Save state

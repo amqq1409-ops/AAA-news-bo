@@ -116,7 +116,7 @@ SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.c
     "haaretz.com": 82, "scmp.com": 84, "nikkei.com": 82, "koreaherald.com": 80,
     "thejakartapost.com": 78, "dawn.com": 78, "xinhuanet.com": 70, "cgtn.com": 68,
     "tass.com": 67, "rt.com": 66}
-SOURCE_NAMES_AR = {"x": "منصة X", "gnews": "أخبار Google", "gdelt": "قاعدة GDELT"}
+SOURCE_NAMES_AR = {"x": "منصة X", "gnews": "أخبار Google", "gdelt": "قاعدة GDELT", "feeds": "المصادر المباشرة"}
 DEFAULT_REGION_PRIORITY = ["east_asia", "southeast_asia", "south_asia", "central_asia", "africa", "latin_america",
                            "oceania", "mideast", "europe", "north_america", "arab"]
 NO_SPACE_LANGS = {"zh", "ja", "ko", "th"}
@@ -687,6 +687,107 @@ def fetch_gnews(cfg, deadline, query_for=None, label="gnews"):
     return out, counts, _status(ok, attempted, detail)
 
 
+# ---------------------------------------------------------------- المصادر المباشرة (RSS / Atom)
+_TAGS = re.compile(r"<[^>]+>")
+
+
+def _local(tag) -> str:
+    return tag.rsplit("}", 1)[-1].lower() if isinstance(tag, str) else ""
+
+
+def parse_feed_date(text: str, tz_hours: float = 0):
+    """تاريخ النشر من خلاصة RSS أو Atom؛ ما لا يذكر منطقته الزمنية يُحسب على tz_hours."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    parsed = None
+    try:
+        parsed = email.utils.parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError):
+        try:
+            parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone(dt.timedelta(hours=tz_hours)))
+    return parsed
+
+
+def parse_feed(xml_bytes, feed: dict):
+    """يقرأ خلاصة RSS أو Atom لمصدر مباشر. يعيد None إن لم تكن خلاصة مفهومة."""
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return None
+    out = []
+    for node in root.iter():
+        if _local(node.tag) not in {"item", "entry"}:
+            continue
+        title = link = date_text = ""
+        for child in node:
+            name = _local(child.tag)
+            if name == "title" and not title:
+                title = "".join(child.itertext())
+            elif name == "link" and not link:
+                if child.get("href"):
+                    if child.get("rel", "alternate") == "alternate":
+                        link = child.get("href")
+                else:
+                    link = child.text or ""
+            elif name in {"pubdate", "published", "date"} or (name == "updated" and not date_text):
+                date_text = child.text or date_text
+        title = re.sub(r"\s+", " ", html.unescape(_TAGS.sub("", html.unescape(title)))).strip()
+        link = link.strip()
+        if not title or not link.startswith("http"):
+            continue
+        domain = feed.get("domain") or host_of(link)
+        article = Article(title, link, domain, feed.get("name") or domain, feed.get("lang", "en"), "",
+                          parse_feed_date(date_text, float(feed.get("tz_hours", 0))), "feed", True)
+        resolve_geo(article, hint_iso=feed.get("iso", ""), prefer_domain=False)
+        out.append(article)
+    return out
+
+
+def fetch_feeds(cfg, deadline):
+    """المصادر المباشرة: خلاصات الوكالات والصحف نفسها، بلا وسيط، فتصل أسرع من أخبار Google."""
+    fc = cfg.get("direct_feeds", {}) or {}
+    feeds = [f for f in fc.get("feeds", []) if f.get("url")]
+    if not fc.get("enabled", True) or not feeds:
+        return [], {}, ("skip", "")
+
+    def fetch_one(feed):
+        if time.monotonic() > deadline:
+            return None
+        return http_get(feed["url"], timeout=int(fc.get("timeout_sec", 10)),
+                        headers={"Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*"})
+
+    with ThreadPoolExecutor(max_workers=max(1, int(fc.get("parallel", 12)))) as pool:
+        responses = list(pool.map(fetch_one, feeds))
+    out, counts = [], {}
+    ok = 0
+    detail = ""
+    now = dt.datetime.now(dt.timezone.utc)
+    for feed, r in zip(feeds, responses):
+        key = "feeds:" + (feed.get("name") or feed["url"])
+        counts[key] = 0
+        if r is None or r.status_code != 200:
+            detail = "تعذر الاتصال" if r is None else f"HTTP {r.status_code}"
+            logging.info("feed %-28s %s", feed.get("name"), detail)
+            continue
+        items = parse_feed(r.content, feed)
+        if items is None:
+            detail = "رد غير مفهوم"
+            logging.info("feed %-28s not a feed", feed.get("name"))
+            continue
+        ok += 1
+        counts[key] = len(items)
+        out.extend(items)
+        ages = [(now - a.published).total_seconds() / 60 for a in items if a.published]
+        logging.info("feed %-28s items=%-3d dated=%-3d newest=%s min", feed.get("name"), len(items), len(ages),
+                     int(min(ages)) if ages else "-")
+    return out, counts, _status(ok, len(feeds), detail)
+
+
 def fetch_gulf_gnews(cfg, deadline):
     if not (cfg.get("gulf", {}) or {}).get("enabled", True):
         return [], {}, ("skip", "")
@@ -714,7 +815,7 @@ class State:
                     self.data.update(loaded)
             except Exception:
                 pass
-        for key, default in (("sent", {}), ("warned", {}), ("tr", {}), ("stories", []), ("health", {}), ("digest", {}), ("ai", {})):
+        for key, default in (("sent", {}), ("warned", {}), ("tr", {}), ("stories", []), ("health", {}), ("digest", {}), ("ai", {}), ("runs", {})):
             if not isinstance(self.data.get(key), type(default)):
                 self.data[key] = default
 
@@ -956,6 +1057,10 @@ def format_message(article: Article, cfg: dict) -> str:
         lines.append("🚨🇸🇦 <b>عاجل</b>")
     else:
         lines.append("🇸🇦 <b>خبر عن 🟢 السعودية</b>")
+    if published_riyadh is not None:
+        minutes = ((cfg.get("_now") or dt.datetime.now(RIYADH)) - published_riyadh).total_seconds() / 60
+        if minutes <= float(cfg.get("flash_minutes", 20)):
+            lines[-1] = "⚡ <b>فوري</b>  •  " + lines[-1]
     lines.append(LINE)
     main_title = shown_ar or article.title
     lines.append(f"📰 <b>{mark(html.escape(main_title[:200]))}</b>")
@@ -1276,7 +1381,7 @@ def send_stories(chosen, cfg, state, tg, archive, ai, deadline) -> int:
 
 
 def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archive: Archive | None = None,
-        now: dt.datetime | None = None, fetchers=None, limit: int = 0) -> int:
+        now: dt.datetime | None = None, fetchers=None, limit: int = 0, instant=False) -> int:
     cfg = dict(cfg)
     gulf_cfg = cfg.get("gulf", {}) or {}
     gulf_max = gulf_cfg.get("max_messages_per_run", 10)
@@ -1290,6 +1395,12 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
     if fast:
         cfg["max_messages_per_run"] = cfg.get("fast_max_messages", 10)
         gulf_max = gulf_cfg.get("fast_max_messages", 6)
+    if instant:
+        # المسار الفوري: المصادر المباشرة فقط، وما نُشر للتو فقط
+        inst = cfg.get("instant", {}) or {}
+        cfg["max_age_hours"] = inst.get("max_age_hours", 2)
+        cfg["max_messages_per_run"] = inst.get("max_messages", 8)
+        gulf_max = inst.get("gulf_max_messages", 5)
     if limit:
         cfg["max_messages_per_run"] = gulf_max = int(limit)
         cfg["test_latest"] = True
@@ -1299,8 +1410,10 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
     cfg["_now"] = now
 
     deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
-    default_fetchers = {"x": fetch_x, "gnews": fetch_gnews, "gulf_gnews": fetch_gulf_gnews,
+    default_fetchers = {"x": fetch_x, "feeds": fetch_feeds, "gnews": fetch_gnews, "gulf_gnews": fetch_gulf_gnews,
                         "gdelt": fetch_gdelt, "gulf_gdelt": fetch_gulf_gdelt}
+    if instant:
+        default_fetchers = {"x": fetch_x, "feeds": fetch_feeds}
     if fast:
         # الفحص السريع: أخبار Google و X فقط؛ GDELT أبطأ ويكفيه الفحص الكامل كل ساعة
         default_fetchers = {k: v for k, v in default_fetchers.items() if "gdelt" not in k}
@@ -1357,11 +1470,26 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
     return sent + gulf_sent
 
 
+def pick_mode(cfg: dict, state: State, now_ts: float | None = None) -> str:
+    """الفحص الفوري كل مرة، والواسع (كل اللغات) كل wide_every_min، والكامل (مع GDELT) كل full_every_min."""
+    inst = cfg.get("instant", {}) or {}
+    now_ts = now_ts or time.time()
+    runs = state.data["runs"]
+    if now_ts - runs.get("full", 0) >= float(inst.get("full_every_min", 60)) * 60:
+        return "full"
+    # نصف دقيقة سماح لأن المنبّه لا يأتي في الثانية نفسها كل مرة
+    if now_ts - runs.get("wide", 0) >= float(inst.get("wide_every_min", 5)) * 60 - 30:
+        return "fast"
+    return "instant"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Saudi News Watch")
     ap.add_argument("--config", default=str(ROOT / "config.yaml"))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--fast", action="store_true")
+    ap.add_argument("--instant", action="store_true", help="المصادر المباشرة فقط (فحص خفيف كل دقيقة)")
+    ap.add_argument("--auto", action="store_true", help="يختار نوع الفحص: فوري، أو واسع كل 5 دقائق، أو كامل كل ساعة")
     ap.add_argument("--breaking", action="store_true")
     ap.add_argument("--saudi", action="store_true", help="Saudi-focused mode")
     ap.add_argument("--test-telegram", action="store_true")
@@ -1377,7 +1505,18 @@ def main():
         return
     state = State()
     archive = Archive(ARCHIVE_DIR)
-    run(cfg, state, tg, fast=args.fast, breaking=args.breaking, archive=archive, limit=args.limit)
+    fast, instant = args.fast, args.instant
+    mode = "instant" if instant else "fast" if fast else "full"
+    if args.auto:
+        mode = pick_mode(cfg, state)
+        fast, instant = mode == "fast", mode == "instant"
+    logging.info("mode=%s", mode)
+    run(cfg, state, tg, fast=fast, breaking=args.breaking, archive=archive, limit=args.limit, instant=instant)
+    stamp = int(time.time())
+    if mode in {"fast", "full"}:
+        state.data["runs"]["wide"] = stamp
+    if mode == "full":
+        state.data["runs"]["full"] = stamp
     if tg.dry_run:
         logging.info("Dry run: nothing was saved")
         return

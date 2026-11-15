@@ -424,3 +424,78 @@ languages_ar:
   no: "النرويجية"
   da: "الدنماركية"
   fi: "الفنلندية"
+
+# المسار الفوري: فحص خفيف كل دقيقة للمصادر المباشرة فقط، يرسل ما نُشر للتو
+instant:
+  max_age_hours: 2          # في المسار الفوري لا يُرسل إلا ما نُشر خلال آخر ساعتين
+  max_messages: 8
+  gulf_max_messages: 5
+  wide_every_min: 5         # الفحص الواسع (أخبار Google بكل اللغات)
+  full_every_min: 60        # الفحص الكامل (مع GDELT)
+# الخبر الذي عمره أقل من كذا دقيقة يحمل علامة ⚡ فوري
+flash_minutes: 20
+
+# المصادر المباشرة: خلاصات الوكالات والصحف نفسها (بلا وسيط). تمر على فلتر العنوان نفسه،
+# فلا يُنشر منها إلا ما يذكر السعودية أو دول الخليج.
+direct_feeds:
+  enabled: true
+  parallel: 12
+  timeout_sec: 10
+  feeds:
+    # --- السعودية
+    - {name: "واس", url: "https://www.spa.gov.sa/rss.xml", lang: ar, iso: SA}
+    - {name: "Arab News", url: "https://www.arabnews.com/rss.xml", lang: en, iso: SA}
+    - {name: "Arab News Saudi", url: "https://www.arabnews.com/cat/1/rss.xml", lang: en, iso: SA}
+    - {name: "Saudi Gazette", url: "https://saudigazette.com.sa/rssFeed/74", lang: en, iso: SA}
+    - {name: "العربية", url: "https://www.alarabiya.net/feed/rss2/ar.xml", lang: ar, iso: SA}
+    - {name: "العربية السعودية", url: "https://www.alarabiya.net/feed/rss2/ar/saudi-today.xml", lang: ar, iso: SA}
+    - {name: "Al Arabiya English", url: "https://english.alarabiya.net/feed/rss2/en.xml", lang: en, iso: SA}
+    - {name: "الشرق الأوسط", url: "https://aawsat.com/feed", lang: ar, iso: SA}
+    - {name: "عكاظ", url: "https://www.okaz.com.sa/rssFeed/0", lang: ar, iso: SA}
+    - {name: "الرياض", url: "https://www.alriyadh.com/section.main.xml", lang: ar, iso: SA}
+    - {name: "سبق", url: "https://sabq.org/rss.xml", lang: ar, iso: SA}
+    - {name: "الاقتصادية", url: "https://www.aleqt.com/feed", lang: ar, iso: SA}
+    - {name: "أرقام", url: "https://www.argaam.com/ar/rss/ho-main-news?sectionid=1524", lang: ar, iso: SA}
+    - {name: "الإخبارية", url: "https://www.alekhbariya.net/ar/rss.xml", lang: ar, iso: SA}
+    # --- الخليج
+    - {name: "وام", url: "https://www.wam.ae/ar/rss/feed/g4xo2wsi5c?slug=all-news", lang: ar, iso: AE}
+    - {name: "Gulf News", url: "https://gulfnews.com/feed", lang: en, iso: AE}
+    - {name: "Khaleej Times", url: "https://www.khaleejtimes.com/api/v1/collections/top-section.rss", lang: en, iso: AE}
+    - {name: "The National", url: "https://www.thenationalnews.com/arc/outboundfeeds/rss/?outputType=xml", lang: en, iso: AE}
+    - {name: "سكاي نيوز عربية", url: "https://www.skynewsarabia.com/rss", lang: ar, iso: AE}
+    - {name: "قنا", url: "https://www.qna.org.qa/ar-QA/RSS-Feeds/Pages/RSS-Feeds/General", lang: ar, iso: QA}
+    - {name: "The Peninsula", url: "https://thepeninsulaqatar.com/rss", lang: en, iso: QA}
+    - {name: "Gulf Times", url: "https://www.gulf-times.com/rssFeed/0", lang: en, iso: QA}
+    - {name: "الجزيرة", url: "https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9", lang: ar, iso: QA}
+    - {name: "Al Jazeera English", url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, iso: QA}
+    - {name: "كونا", url: "https://www.kuna.net.kw/RssNews.aspx?language=ar", lang: ar, iso: KW}
+    - {name: "Kuwait Times", url: "https://kuwaittimes.com/feed/", lang: en, iso: KW}
+    - {name: "Arab Times", url: "https://www.arabtimesonline.com/rssFeed/47/", lang: en, iso: KW}
+    - {name: "بنا", url: "https://www.bna.bh/rss.aspx", lang: ar, iso: BH}
+    - {name: "GDN Bahrain", url: "https://www.gdnonline.com/rss", lang: en, iso: BH}
+    - {name: "Times of Oman", url: "https://timesofoman.com/rss", lang: en, iso: OM}
+    - {name: "Muscat Daily", url: "https://www.muscatdaily.com/feed/", lang: en, iso: OM}
+    - {name: "Oman Observer", url: "https://www.omanobserver.om/rssFeed/1", lang: en, iso: OM}
+    - {name: "Zawya", url: "https://www.zawya.com/sitemaps/en/rss", lang: en, iso: AE}
+    # --- عالمية (أقسام الشرق الأوسط)
+    - {name: "BBC Middle East", url: "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml", lang: en, iso: GB}
+    - {name: "BBC عربي", url: "https://feeds.bbci.co.uk/arabic/rss.xml", lang: ar, iso: GB}
+    - {name: "Guardian Saudi", url: "https://www.theguardian.com/world/saudiarabia/rss", lang: en, iso: GB}
+    - {name: "Guardian Middle East", url: "https://www.theguardian.com/world/middleeast/rss", lang: en, iso: GB}
+    - {name: "NYT Middle East", url: "https://rss.nytimes.com/services/xml/rss/nyt/MiddleEast.xml", lang: en, iso: US}
+    - {name: "France 24 Middle East", url: "https://www.france24.com/en/middle-east/rss", lang: en, iso: FR}
+    - {name: "فرانس 24", url: "https://www.france24.com/ar/rss", lang: ar, iso: FR}
+    - {name: "DW عربية", url: "https://rss.dw.com/rdf/rss-ar-all", lang: ar, iso: DE}
+    - {name: "CNN بالعربية", url: "https://arabic.cnn.com/api/v1/rss/middle-east/rss.xml", lang: ar, iso: US}
+    - {name: "CNBC World", url: "https://www.cnbc.com/id/100727362/device/rss/rss.html", lang: en, iso: US}
+    - {name: "Middle East Eye", url: "https://www.middleeasteye.net/rss", lang: en, iso: GB}
+    - {name: "Al-Monitor", url: "https://www.al-monitor.com/rss", lang: en, iso: US}
+    - {name: "Anadolu", url: "https://www.aa.com.tr/en/rss/default?cat=middle-east", lang: en, iso: TR}
+    - {name: "الأناضول", url: "https://www.aa.com.tr/ar/rss/default?cat=live", lang: ar, iso: TR}
+    - {name: "Times of Israel", url: "https://www.timesofisrael.com/feed/", lang: en, iso: IL}
+    - {name: "TASS", url: "https://tass.com/rss/v2.xml", lang: en, iso: RU}
+    - {name: "RT عربي", url: "https://arabic.rt.com/rss/", lang: ar, iso: RU}
+    - {name: "OilPrice", url: "https://oilprice.com/rss/main", lang: en, iso: US}
+    - {name: "Dawn", url: "https://www.dawn.com/feeds/home", lang: en, iso: PK}
+    - {name: "The Hindu World", url: "https://www.thehindu.com/news/international/feeder/default.rss", lang: en, iso: IN}
+    - {name: "SCMP World", url: "https://www.scmp.com/rss/5/feed", lang: en, iso: HK}
