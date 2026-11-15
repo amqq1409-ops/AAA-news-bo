@@ -454,8 +454,6 @@ direct_feeds:
     - {name: "سكاي نيوز عربية", url: "https://www.skynewsarabia.com/rss", lang: ar, iso: AE}
     - {name: "قنا", url: "https://qna.org.qa/ar-QA/Pages/RSS-Feeds/General", lang: ar, iso: QA}
     - {name: "قنا - قطر", url: "https://qna.org.qa/ar-QA/Pages/RSS-Feeds/Qatar", lang: ar, iso: QA}
-    - {name: "QNA", url: "https://qna.org.qa/en/Pages/RSS-Feeds/General", lang: en, iso: QA}
-    - {name: "QNA Qatar", url: "https://qna.org.qa/en/Pages/RSS-Feeds/Qatar", lang: en, iso: QA}
     - {name: "Gulf Times", url: "https://www.gulf-times.com/rssFeed/0", lang: en, iso: QA}
     - {name: "الجزيرة", url: "https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9", lang: ar, iso: QA}
     - {name: "Al Jazeera English", url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, iso: QA}
