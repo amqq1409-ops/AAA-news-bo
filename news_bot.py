@@ -11,6 +11,7 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
@@ -393,6 +394,49 @@ def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
     return None
 
 
+def translate_many(titles: list, translate=None, batch_size: int = 12) -> list:
+    """يترجم عدة عناوين في طلب واحد (سطر لكل عنوان) بدل طلب لكل عنوان، فلا تحجبنا خدمة الترجمة.
+
+    يعيد قائمة بطول titles؛ العنصر None حيث تعذرت الترجمة.
+    """
+    translate = translate or translate_to_arabic
+    out = [None] * len(titles)
+    failures = 0
+    for start in range(0, len(titles), batch_size):
+        if failures >= 2:
+            break  # الخدمة متعثرة: نكفّ عن المحاولة في هذا الفحص
+        chunk = [re.sub(r"\s+", " ", t).strip() for t in titles[start:start + batch_size]]
+        result = translate("\n".join(chunk))
+        parts = [part.strip() for part in (result or "").split("\n") if part.strip()]
+        if len(parts) == len(chunk):
+            out[start:start + len(chunk)] = parts
+            failures = 0
+            continue
+        if result is None:
+            failures += 1
+            continue
+        # عدد الأسطر اختلف: نترجم عناوين هذه المجموعة واحدًا واحدًا
+        for offset, title in enumerate(chunk):
+            single = translate(title)
+            if single is None:
+                failures += 1
+                break
+            out[start + offset] = single.strip()
+    return out
+
+
+_URL_DATE = re.compile(r"(?<!\d)(20\d{2})[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])(?!\d)")
+
+
+def url_date(url: str):
+    """تاريخ النشر المكتوب في الرابط نفسه (مثل ‎/2024/05/12/‎) إن وُجد."""
+    try:
+        match = _URL_DATE.search(urlparse(url).path)
+        return dt.date(int(match.group(1)), int(match.group(2)), int(match.group(3))) if match else None
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------- المصادر
 def _status(ok: int, attempted: int, detail: str = ""):
     if attempted == 0:
@@ -435,6 +479,8 @@ def fetch_gdelt(cfg, deadline, queries=None):
     out, counts = [], {}
     ok = attempted = 0
     detail = ""
+    # GDELT بطيء أحيانًا: له حصة زمنية حتى لا يؤخر بقية الأخبار
+    deadline = min(deadline, time.monotonic() + float(gd.get("time_budget_sec", 90)))
     for lang, query in queries:
         if time.monotonic() > deadline:
             break
@@ -606,19 +652,28 @@ def fetch_gnews(cfg, deadline, query_for=None, label="gnews"):
     ok = attempted = 0
     detail = ""
     recency = (gn.get("recency") or "").strip()
+    jobs = []
     for ed in gn.get("editions", []):
-        if time.monotonic() > deadline:
-            break
         q = query_for(ed) if query_for else ed.get("query", '"Saudi Arabia"')
         if not q:
             continue
-        attempted += 1
-        key = f'{label}:{ed.get("hl")}-{ed.get("gl")}'
-        counts[key] = 0
         if recency:
             q = f"{q} when:{recency}"
         url = f'https://news.google.com/rss/search?q={quote_plus(q)}&hl={ed.get("hl", "en-US")}&gl={ed.get("gl", "US")}&ceid={quote_plus(ed.get("ceid", "US:en"))}'
-        r = http_get(url)
+        jobs.append((ed, f'{label}:{ed.get("hl")}-{ed.get("gl")}', url))
+
+    def fetch_one(job):
+        if time.monotonic() > deadline:
+            return None
+        return http_get(job[2], timeout=15)
+
+    # كل النسخ تُطلب معًا بالتوازي: ثوانٍ بدل دقائق
+    workers = max(1, int(gn.get("parallel", 8)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        responses = list(pool.map(fetch_one, jobs))
+    for (ed, key, _), r in zip(jobs, responses):
+        attempted += 1
+        counts[key] = 0
         if r is None or r.status_code != 200:
             detail = "تعذر الاتصال" if r is None else f"HTTP {r.status_code}"
             continue
@@ -799,7 +854,30 @@ def is_recent(article: Article, max_age_hours: float, now: dt.datetime | None = 
         return False
     now = now or dt.datetime.now(RIYADH)
     age = (now - published).total_seconds() / 3600
-    return -1 <= age <= max_age_hours
+    if not -1 <= age <= max_age_hours:
+        return False
+    # بعض المصادر تعطي وقت "الرصد" لا وقت النشر: إن دلّ الرابط على تاريخ أقدم فالخبر قديم
+    stamped = url_date(article.url)
+    if stamped and (now.date() - stamped).days * 24 > max_age_hours + 24:
+        return False
+    return True
+
+
+def age_text(article: Article, now: dt.datetime | None = None) -> str:
+    """عمر الخبر بصيغة قصيرة: "منذ 12 دقيقة"."""
+    published = publication_datetime_riyadh(article)
+    if published is None:
+        return ""
+    minutes = int(((now or dt.datetime.now(RIYADH)) - published).total_seconds() // 60)
+    if minutes < 2:
+        return "الآن"
+    if minutes < 60:
+        return f"منذ {minutes} دقيقة"
+    hours = minutes // 60
+    if hours < 24:
+        text = "ساعة" if hours == 1 else "ساعتين" if hours == 2 else f"{hours} ساعات" if hours <= 10 else f"{hours} ساعة"
+        return f"منذ {text}" + (f" و{minutes % 60} دقيقة" if minutes % 60 >= 10 and hours < 6 else "")
+    return f"منذ {hours // 24} يوم"
 
 
 def hashtag(text: str) -> str:
@@ -847,6 +925,9 @@ def format_message(article: Article, cfg: dict) -> str:
     is_gulf = article.section == "gulf"
     mark = (lambda text: text) if is_gulf else highlight_saudi
     when = "🕒 " + published_riyadh.strftime("%Y-%m-%d • %H:%M") + " (الرياض)" if published_riyadh else ""
+    age = age_text(article, cfg.get("_now"))
+    if when and age:
+        when = f"⏱ <b>{age}</b>  •  " + when
     lines = []
     if article.origin == "x":
         lines += ["🇸🇦 <b>منشور على 𝕏</b>", LINE]
@@ -950,7 +1031,7 @@ def prefilter(articles, cfg, state, pats, now=None, match=None):
 
 
 def add_arabic_titles(candidates, cfg, state, deadline, translate=translate_to_arabic):
-    failures = 0
+    pending = []
     for article in candidates:
         if not needs_arabic_translation(article):
             article.title_ar = article.title
@@ -958,15 +1039,18 @@ def add_arabic_titles(candidates, cfg, state, deadline, translate=translate_to_a
         if not cfg.get("translate_titles", True):
             continue
         cached = state.cached_translation(article.title)
-        if cached is None and failures < 3 and time.monotonic() < deadline:
-            cached = translate(article.title)
-            if cached:
-                state.cache_translation(article.title, cached)
-                failures = 0
-            else:
-                failures += 1  # خدمة الترجمة متعثرة: نكفّ عن المحاولة في هذا الفحص
         if cached:
             article.title_ar = cached
+            article.translated = True
+        else:
+            pending.append(article)
+    if not pending or time.monotonic() >= deadline:
+        return
+    results = translate_many([a.title for a in pending], translate, int(cfg.get("translate_batch", 12)))
+    for article, translated in zip(pending, results):
+        if translated and norm_title(translated) != norm_title(article.title):
+            state.cache_translation(article.title, translated)
+            article.title_ar = translated
             article.translated = True
 
 
@@ -996,6 +1080,12 @@ def score_and_focus(candidates, cfg, pats, now=None):
 def sort_key(article: Article, cfg: dict):
     main = article.breaking_score if cfg.get("breaking_mode") else article.relevance_score
     bonus = 3 * min(len(unique_sources(article)), 5)
+    # الأحدث أولًا: حتى 30 نقطة لخبر نُشر للتو، تتناقص إلى صفر خلال fresh_hours
+    fresh_hours = float(cfg.get("fresh_hours", 3))
+    if article.published and fresh_hours > 0:
+        now = cfg.get("_now") or dt.datetime.now(dt.timezone.utc)
+        age = max(0.0, (now - article.published).total_seconds() / 3600)
+        bonus += int(30 * max(0.0, 1 - age / fresh_hours))
     return (-(main + bonus), -article.source_score, -(article.published.timestamp() if article.published else 0))
 
 
@@ -1159,6 +1249,10 @@ def build_stories(articles, cfg, state, pats, deadline, now, match=None):
 
 def send_stories(chosen, cfg, state, tg, archive, ai, deadline) -> int:
     sent = 0
+    # ما اختير ولم يُترجم بعد (تعثر الترجمة سابقًا): محاولة أخيرة قبل الإرسال
+    add_arabic_titles([a for a in chosen if a.title_ar is None], cfg, state, deadline)
+    # الأقدم أولًا ليبقى ترتيب القناة زمنيًا
+    chosen = sorted(chosen, key=lambda a: a.published.timestamp() if a.published else 0)
     for article in chosen:
         if article.origin != "x" and ai.available() and time.monotonic() < deadline:
             info = ai.enrich(article.title, article.source_name, article.url, article.domain)
@@ -1177,7 +1271,7 @@ def send_stories(chosen, cfg, state, tg, archive, ai, deadline) -> int:
             archive.add(archive_record(article))
             sent += 1
         if not tg.dry_run:
-            time.sleep(2)
+            time.sleep(float(cfg.get("send_pause_sec", 1)))
     return sent
 
 
@@ -1202,10 +1296,14 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
     cfg = apply_saudi_focus(cfg)
     archive = archive or Archive(ARCHIVE_DIR)
     now = now or dt.datetime.now(RIYADH)
+    cfg["_now"] = now
 
     deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
     default_fetchers = {"x": fetch_x, "gnews": fetch_gnews, "gulf_gnews": fetch_gulf_gnews,
                         "gdelt": fetch_gdelt, "gulf_gdelt": fetch_gulf_gdelt}
+    if fast:
+        # الفحص السريع: أخبار Google و X فقط؛ GDELT أبطأ ويكفيه الفحص الكامل كل ساعة
+        default_fetchers = {k: v for k, v in default_fetchers.items() if "gdelt" not in k}
     articles, counts, statuses = [], {}, {}
     for name, fetch in (fetchers or default_fetchers).items():
         found, c, status = fetch(cfg, deadline)
@@ -1240,8 +1338,9 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
                 "max_per_subject": gulf_cfg.get("max_per_country", 3)}
         gulf_stories = build_stories(articles, gcfg, state, GULF.patterns, deadline, now, match=is_gulf)
         chosen = select_clusters(gulf_stories, gcfg)
-        if chosen:
+        if chosen and gulf_cfg.get("header", False):
             tg.send_text("🌴 ━━━━ <b>أخبار الخليج</b> ━━━━ 🌴\n🇦🇪 الإمارات • 🇶🇦 قطر • 🇰🇼 الكويت • 🇧🇭 البحرين • 🇴🇲 عُمان")
+        if chosen:
             gulf_sent = send_stories(chosen, gcfg, state, tg, archive, ai, deadline)
 
     if not cfg.get("test_latest"):

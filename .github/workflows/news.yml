@@ -2,8 +2,10 @@ name: Saudi News Watch
 
 on:
   schedule:
-    - cron: "5 * * * *"
-    - cron: "*/10 * * * *"
+    # فحص كامل كل ساعة (مع GDELT)
+    - cron: "7 * * * *"
+    # فحص سريع كل 5 دقائق: أخبار فورية
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -25,7 +27,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +51,7 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="--dry-run"; fi
           LIMIT="${{ inputs.limit }}"
           if [[ "$LIMIT" =~ ^[0-9]+$ ]] && [ "$LIMIT" -gt 0 ]; then ARGS="$ARGS --limit $LIMIT"; fi
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "5 * * * *" ]; then ARGS="$ARGS --fast"; fi
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "7 * * * *" ]; then ARGS="$ARGS --fast"; fi
           python news_bot.py $ARGS
 
       - name: Save state

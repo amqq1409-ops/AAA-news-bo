@@ -19,6 +19,7 @@ import news_bot as nb
 from archive import Archive, build_digest
 
 CFG = yaml.safe_load((Path(nb.ROOT) / "config.yaml").read_text("utf-8"))
+DIGEST_ON = {**CFG, "digest": {**CFG["digest"], "enabled": True}}
 NOW = dt.datetime(2026, 11, 14, 0, 5, tzinfo=nb.RIYADH)
 FAKE_AR = {
     "Saudi Arabia signs $5 billion investment deal with Japan": "السعودية توقع صفقة استثمار بقيمة 5 مليارات دولار مع اليابان",
@@ -26,6 +27,14 @@ FAKE_AR = {
     "サウジアラビア、日本と50億ドルの投資契約を締結": "المملكة العربية السعودية توقع صفقة استثمار بقيمة 5 مليارات دولار مع اليابان",
     "サウジ、新しい観光ビザを発表": "السعودية تعلن عن تأشيرة سياحية جديدة",
 }
+
+
+def fake_translate(text):
+    """مثل خدمة الترجمة: سطر لكل عنوان، وما لا تعرفه تعيده كما هو."""
+    lines = text.split("\n")
+    if len(lines) == 1:
+        return FAKE_AR.get(text)
+    return "\n".join(FAKE_AR.get(line, line) for line in lines)
 
 
 def art(title, domain="example.com", lang="en", minutes_ago=30, origin="gdelt", country="", source=None):
@@ -57,7 +66,7 @@ def run_with(articles, state, tg, tmp, statuses=None, cfg=None, now=NOW):
         "x": lambda c, d: ([], {}, statuses.get("x", ("skip", ""))),
     }
     original = nb.translate_to_arabic
-    nb.add_arabic_titles.__defaults__ = (lambda t: FAKE_AR.get(t),)
+    nb.add_arabic_titles.__defaults__ = (fake_translate,)
     try:
         return nb.run(cfg or CFG, state, tg, archive=Archive(Path(tmp) / "archive"), now=now, fetchers=fetchers)
     finally:
@@ -257,8 +266,8 @@ class DigestAndArchiveTests(unittest.TestCase):
                 a.published = evening - dt.timedelta(minutes=20)
             archive = Archive(Path(tmp) / "archive")
             fetchers = {"gnews": lambda c, d: (items, {}, ("ok", ""))}
-            nb.add_arabic_titles.__defaults__ = (lambda t: FAKE_AR.get(t),)
-            nb.run(CFG, state, tg, archive=archive, now=evening, fetchers=fetchers)
+            nb.add_arabic_titles.__defaults__ = (fake_translate,)
+            nb.run({**CFG, "digest": {**CFG["digest"], "enabled": True}}, state, tg, archive=archive, now=evening, fetchers=fetchers)
             archive.save()
             digests = [m for m in tg.sent if "موجز اليوم" in m]
             self.assertEqual(len(digests), 1)
@@ -277,19 +286,19 @@ class DigestAndArchiveTests(unittest.TestCase):
             rec = {"ts": friday.timestamp() - 600, "title": "t", "url": "https://e.com", "origin": "gnews", "score": 50}
             tg, state, archive = Recorder(), new_state(tmp), Archive(Path(tmp) / "a")
             archive.add(dict(rec))
-            nb.maybe_send_digests(CFG, state, tg, archive, friday)
+            nb.maybe_send_digests(DIGEST_ON, state, tg, archive, friday)
             self.assertEqual(len([m for m in tg.sent if "الأسبوعي" in m]), 0)
             self.assertEqual(state.data["digest"].get("weekly"), "2026-11-13")
             tg2, state2, archive2 = Recorder(), new_state(tmp + "/b"), Archive(Path(tmp) / "c")
             archive2.add(dict(rec))
             archive2.add({**rec, "ts": friday.timestamp() - 5 * 86400})
-            nb.maybe_send_digests(CFG, state2, tg2, archive2, friday)
+            nb.maybe_send_digests(DIGEST_ON, state2, tg2, archive2, friday)
             self.assertEqual(len([m for m in tg2.sent if "الأسبوعي" in m]), 1)
 
     def test_no_digest_before_hour(self):
         with tempfile.TemporaryDirectory() as tmp:
             tg, state = Recorder(), new_state(tmp)
-            nb.maybe_send_digests(CFG, state, tg, Archive(Path(tmp) / "a"), NOW.replace(hour=15))
+            nb.maybe_send_digests(DIGEST_ON, state, tg, Archive(Path(tmp) / "a"), NOW.replace(hour=15))
             self.assertEqual(tg.sent, [])
 
     def test_digest_text_limits(self):
@@ -412,8 +421,8 @@ class GulfTests(unittest.TestCase):
                    "Sharjah book fair draws record visitors", "Emirati astronaut returns from space station", "Dubai airport traffic hits record"]
             items += [art(t, f"site{i}.ae", country="United Arab Emirates") for i, t in enumerate(uae)]
             run_with(items, state, tg, tmp)
-            sep = next(i for i, m in enumerate(tg.sent) if "أخبار الخليج" in m and "🌴" in m)
-            before, after = tg.sent[:sep], tg.sent[sep + 1:]
+            self.assertFalse(any("🌴" in m for m in tg.sent))   # لا رسالة فاصلة: كل خبر فوري بذاته
+            before, after = tg.sent[:1], tg.sent[1:]
             self.assertEqual(len(before), 1)
             self.assertIn("خبر عن 🟢 السعودية", before[0])   # خبر السعودية وقطر في قسم السعودية
             self.assertTrue(all("خبر خليجي —" in m for m in after))
@@ -440,3 +449,92 @@ class GulfTests(unittest.TestCase):
         self.assertIn("حسب الدولة", text)
         self.assertIn("قطر 1", text)
         self.assertIn("عدد ما نُشر: 1", text)
+
+
+class FreshAndFastTests(unittest.TestCase):
+    def test_translate_many_uses_one_request_per_batch(self):
+        calls = []
+
+        def translate(text):
+            calls.append(text)
+            return "\n".join("ع" + str(i) for i, _ in enumerate(text.split("\n")))
+
+        out = nb.translate_many([f"title {i}" for i in range(20)], translate, batch_size=10)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(out), 20)
+        self.assertTrue(all(out))
+
+    def test_translate_many_falls_back_when_lines_differ(self):
+        def translate(text):
+            return "سطر واحد" if "\n" in text else "ترجمة " + text
+
+        self.assertEqual(nb.translate_many(["a", "b"], translate), ["ترجمة a", "ترجمة b"])
+
+    def test_translate_many_stops_when_service_down(self):
+        calls = []
+
+        def translate(text):
+            calls.append(text)
+            return None
+
+        out = nb.translate_many([f"t{i}" for i in range(50)], translate, batch_size=5)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(out, [None] * 50)
+
+    def test_old_date_in_url_is_rejected(self):
+        a = art("Saudi Arabia opens new metro line in Riyadh")
+        a.url = "https://example.com/2024/05/12/saudi-metro"
+        self.assertFalse(nb.is_recent(a, 6, NOW))
+        a.url = "https://example.com/2026/11/13/saudi-metro"
+        self.assertTrue(nb.is_recent(a, 6, NOW))
+
+    def test_news_older_than_limit_is_rejected(self):
+        self.assertTrue(nb.is_recent(art("Saudi news", minutes_ago=60), 6, NOW))
+        self.assertFalse(nb.is_recent(art("Saudi news", minutes_ago=7 * 60), 6, NOW))
+
+    def test_fresher_story_ranks_first(self):
+        cfg = {"_now": NOW, "fresh_hours": 3}
+        fresh, stale = art("Saudi A", minutes_ago=5), art("Saudi B", minutes_ago=170)
+        fresh.relevance_score = stale.relevance_score = 50
+        self.assertLess(nb.sort_key(fresh, cfg), nb.sort_key(stale, cfg))
+
+    def test_age_text(self):
+        self.assertEqual(nb.age_text(art("x", minutes_ago=12), NOW), "منذ 12 دقيقة")
+        self.assertEqual(nb.age_text(art("x", minutes_ago=0), NOW), "الآن")
+        self.assertIn("⏱", nb.format_message(art("Saudi Arabia opens metro", minutes_ago=12), {"_now": NOW}))
+
+    def test_messages_sent_oldest_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tg, state = Recorder(), new_state(tmp)
+            items = [
+                art("Saudi Arabia opens new metro line in Riyadh", "arabnews.com", minutes_ago=10),
+                art("Saudi Aramco reports quarterly oil profit rise", "reuters.com", minutes_ago=90),
+            ]
+            run_with(items, state, tg, tmp)
+            news = [m for m in tg.sent if "📰" in m]
+            self.assertEqual(len(news), 2)
+            self.assertIn("Aramco", news[0])
+
+    def test_no_digest_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tg, state = Recorder(), new_state(tmp)
+            evening = NOW.replace(hour=21, minute=30)
+            run_with([art("Saudi Arabia opens new metro line in Riyadh", minutes_ago=-1290 + 30)], state, tg, tmp, now=evening)
+            self.assertFalse([m for m in tg.sent if "موجز" in m])
+
+    def test_gnews_fetched_in_parallel(self):
+        cfg = {"google_news": {"parallel": 4, "editions": [
+            {"lang": "en", "hl": f"en-{i}", "gl": "US", "ceid": "US:en", "query": "Saudi"} for i in range(6)]}}
+        rss = b"<rss><channel><item><title>Saudi news - Src</title><link>https://e.com/a</link><source url='https://e.com'>Src</source><pubDate>Sat, 14 Nov 2026 00:00:00 GMT</pubDate></item></channel></rss>"
+
+        class Resp:
+            status_code = 200
+            content = rss
+
+        original = nb.http_get
+        nb.http_get = lambda url, **kw: Resp()
+        try:
+            items, counts, status = nb.fetch_gnews(cfg, time.monotonic() + 30)
+        finally:
+            nb.http_get = original
+        self.assertEqual((len(items), status[0], len(counts)), (6, "ok", 6))

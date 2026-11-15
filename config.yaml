@@ -6,12 +6,18 @@ max_per_language_overrides:
   en: 6
 include_other_tier: true
 strict_title_filter: true
-total_time_budget_sec: 1200
+total_time_budget_sec: 420
 translate_titles: true
-# يُنشر ما نُشر خلال آخر كذا ساعة (بدل "نفس اليوم")
-max_age_hours: 24
+# فلتر الحداثة: لا يُنشر إلا ما نُشر خلال آخر كذا ساعة (الأخبار الأقدم تُهمل)
+max_age_hours: 6
+# الأحدث أولًا: الخبر المنشور للتو يتقدم في الترتيب، ويزول هذا التقديم بعد كذا ساعة
+fresh_hours: 3
+# الثواني بين رسالة وأخرى في القناة
+send_pause_sec: 1
+# عدد العناوين التي تُترجم في طلب واحد
+translate_batch: 12
 # أقصى عدد من الأخبار الجديدة يُترجم ويُفحص في الفحص الواحد
-max_candidates: 80
+max_candidates: 60
 
 # كشف الخبر المكرر: نسبة تشابه العنوانين (0.6 = 60% من الكلمات مشتركة)
 dedupe:
@@ -31,10 +37,12 @@ gulf:
   fast_max_messages: 6        # في الفحص السريع
   max_per_country: 3          # حتى لا تطغى دولة واحدة على الدفعة
   gdelt: true
+  header: false               # رسالة فاصلة "أخبار الخليج" قبل الدفعة (متوقفة: كل خبر خليجي يحمل علم دولته)
 
 # الموجز اليومي والأسبوعي (بتوقيت الرياض). weekly_day: الاثنين=0 ... الجمعة=4 ... الأحد=6
+# متوقف: كل الأخبار تُرسل فورية بلا موجزات جامعة. لإعادته اجعل enabled: true
 digest:
-  enabled: true
+  enabled: false
   hour: 21
   top_n: 10
   weekly_day: 4
@@ -52,9 +60,11 @@ ai:
   max_calls_per_day: 300    # سقف يومي يحمي من أي تكلفة غير متوقعة
   fetch_article_text: true
 
+# GDELT يعمل في الفحص الكامل كل ساعة فقط، وبحصة زمنية حتى لا يؤخر الإرسال
 gdelt:
   enabled: true
-  timespan: "3h"
+  time_budget_sec: 90
+  timespan: "2h"
   maxrecords: 60
   query_terms: '("Saudi Arabia" OR Riyadh OR Aramco OR NEOM OR "bin Salman")'
   languages: [english, arabic, french, german, spanish, russian, chinese, japanese, korean, turkish, persian, urdu, hindi, indonesian, portuguese, italian, hebrew, thai, vietnamese, malay, bengali, tamil, polish, dutch, ukrainian, greek, swedish, czech, romanian, hungarian, bulgarian, serbian, kazakh, uzbek, swahili, amharic, somali, hausa, nepali, norwegian, danish, finnish]
@@ -203,7 +213,8 @@ x:
 
 google_news:
   enabled: true
-  recency: "1d"             # يطلب من أخبار Google ما نُشر خلال يوم واحد فقط
+  recency: "6h"             # يطلب من أخبار Google ما نُشر خلال آخر 6 ساعات فقط
+  parallel: 8               # عدد الطلبات المتزامنة (يجمع كل النسخ في ثوانٍ)
   editions:
     - {lang: en, hl: "en-US", gl: "US", ceid: "US:en", country_ar: "أمريكا", query: '"Saudi Arabia" OR Riyadh'}
     - {lang: en, hl: "en-GB", gl: "GB", ceid: "GB:en", country_ar: "بريطانيا", query: '"Saudi Arabia" OR Riyadh'}
