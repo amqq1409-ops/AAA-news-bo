@@ -715,27 +715,47 @@ def parse_feed_date(text: str, tz_hours: float = 0):
 
 def parse_feed(xml_bytes, feed: dict):
     """يقرأ خلاصة RSS أو Atom لمصدر مباشر. يعيد None إن لم تكن خلاصة مفهومة."""
+    rows = []
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError:
-        return None
+        root = None
+    if root is None:
+        # خلاصة معطوبة الصياغة (تحدث في بعض المواقع الرسمية): نقرأ عناصرها بالنص مباشرة
+        text = xml_bytes.decode("utf-8", "replace") if isinstance(xml_bytes, bytes) else str(xml_bytes)
+
+        def field(block, name):
+            m = re.search(rf"<{name}\b[^>]*>(.*?)</{name}>", block, re.S | re.I)
+            value = m.group(1).strip() if m else ""
+            cdata = re.fullmatch(r"<!\[CDATA\[(.*?)\]\]>", value, re.S)
+            return cdata.group(1) if cdata else value
+
+        for block in re.findall(r"<item\b[^>]*>(.*?)</item>", text, re.S | re.I):
+            rows.append((field(block, "title"), html.unescape(field(block, "link")), field(block, "pubDate")))
+        if not rows:
+            return None
+    else:
+        for node in root.iter():
+            if _local(node.tag) not in {"item", "entry"}:
+                continue
+            title = link = date_text = ""
+            for child in node:
+                name = _local(child.tag)
+                if name == "title" and not title:
+                    title = "".join(child.itertext())
+                elif name == "link" and not link:
+                    if child.get("href"):
+                        if child.get("rel", "alternate") == "alternate":
+                            link = child.get("href")
+                    else:
+                        link = child.text or ""
+                elif name in {"pubdate", "published", "date"} or (name == "updated" and not date_text):
+                    date_text = child.text or date_text
+            rows.append((title, link, date_text))
+        if not rows and _local(root.tag) not in {"rss", "feed", "rdf"}:
+            return None  # صفحة عادية لا خلاصة
     out = []
-    for node in root.iter():
-        if _local(node.tag) not in {"item", "entry"}:
-            continue
-        title = link = date_text = ""
-        for child in node:
-            name = _local(child.tag)
-            if name == "title" and not title:
-                title = "".join(child.itertext())
-            elif name == "link" and not link:
-                if child.get("href"):
-                    if child.get("rel", "alternate") == "alternate":
-                        link = child.get("href")
-                else:
-                    link = child.text or ""
-            elif name in {"pubdate", "published", "date"} or (name == "updated" and not date_text):
-                date_text = child.text or date_text
+    for title, link, date_text in rows:
         title = re.sub(r"\s+", " ", html.unescape(_TAGS.sub("", html.unescape(title)))).strip()
         link = link.strip()
         if not title or not link.startswith("http"):
