@@ -20,7 +20,6 @@ import yaml
 
 import geo
 import gulf
-import watch
 from ai import TONE_EMOJI, TONES, AIEnricher
 from archive import Archive, build_digest
 
@@ -117,8 +116,7 @@ SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.c
     "haaretz.com": 82, "scmp.com": 84, "nikkei.com": 82, "koreaherald.com": 80,
     "thejakartapost.com": 78, "dawn.com": 78, "xinhuanet.com": 70, "cgtn.com": 68,
     "tass.com": 67, "rt.com": 66}
-SOURCE_NAMES_AR = {"x": "منصة X", "gnews": "أخبار Google", "gdelt": "قاعدة GDELT", "feeds": "المصادر المباشرة",
-                   "tg": "قنوات تيليجرام", "bsky": "حسابات Bluesky", "wfeeds": "المصادر الرسمية والمؤسسات"}
+SOURCE_NAMES_AR = {"x": "منصة X", "gnews": "أخبار Google", "gdelt": "قاعدة GDELT", "feeds": "المصادر المباشرة"}
 DEFAULT_REGION_PRIORITY = ["east_asia", "southeast_asia", "south_asia", "central_asia", "africa", "latin_america",
                            "oceania", "mideast", "europe", "north_america", "arab"]
 NO_SPACE_LANGS = {"zh", "ja", "ko", "th"}
@@ -168,9 +166,8 @@ class Article:
         self.also = []             # مصادر أخرى نشرت الخبر نفسه
         self.tok_ar = None
         self.tok_orig = set()
-        self.section = "saudi"    # saudi أو gulf أو world
-        self.subjects = []         # الدول التي يتناولها الخبر (الخليجية في قسم الخليج، وكل الدول في قسم العالم)
-        self.watch = False         # من المصادر المتابَعة لقسم "دول ورؤساء"
+        self.section = "saudi"    # saudi أو gulf
+        self.subjects = []         # الدول الخليجية التي يتناولها الخبر
 
     def all_text(self) -> str:
         return (self.title + " " + (self.title_ar or "")).strip()
@@ -811,46 +808,6 @@ def fetch_feeds(cfg, deadline):
     return out, counts, _status(ok, len(feeds), detail)
 
 
-# ---------------------------------------------------------------- المصادر المتابَعة (قسم دول ورؤساء)
-def _watch_articles(rows, origin, domain):
-    out = []
-    for row in rows:
-        article = Article(row["text"][:900], row["url"], domain, row["source"], row.get("lang", "en"), "",
-                          row.get("published"), origin, True)
-        article.watch = True
-        out.append(article)
-    return out
-
-
-def fetch_telegram(cfg, deadline):
-    wcfg = cfg.get("world", {}) or {}
-    if not wcfg.get("enabled", True):
-        return [], {}, ("skip", "")
-    rows, counts, status = watch.fetch_telegram(wcfg, deadline, http_get, logging.info)
-    return _watch_articles(rows, "tg", "t.me"), counts, status
-
-
-def fetch_bluesky(cfg, deadline):
-    wcfg = cfg.get("world", {}) or {}
-    state = cfg.get("_state")
-    if not wcfg.get("enabled", True) or state is None:
-        return [], {}, ("skip", "")
-    handles = watch.load_handles(ROOT / str(wcfg.get("watchlist", "watchlist.txt")))
-    rows, counts, status = watch.fetch_bluesky(wcfg, state.data["bsky"], handles, deadline, http_get, logging.info,
-                                               resolve=cfg.get("_resolve", True))
-    return _watch_articles(rows, "bsky", "bsky.app"), counts, status
-
-
-def fetch_world_feeds(cfg, deadline):
-    wcfg = cfg.get("world", {}) or {}
-    if not wcfg.get("enabled", True):
-        return [], {}, ("skip", "")
-    articles, counts, status = fetch_feeds({"direct_feeds": wcfg.get("feeds", {}) or {}}, deadline)
-    for article in articles:
-        article.watch = True
-    return articles, {"w" + key: value for key, value in counts.items()}, status
-
-
 def fetch_gulf_gnews(cfg, deadline):
     if not (cfg.get("gulf", {}) or {}).get("enabled", True):
         return [], {}, ("skip", "")
@@ -878,7 +835,7 @@ class State:
                     self.data.update(loaded)
             except Exception:
                 pass
-        for key, default in (("sent", {}), ("warned", {}), ("tr", {}), ("stories", []), ("health", {}), ("digest", {}), ("ai", {}), ("runs", {}), ("bsky", {})):
+        for key, default in (("sent", {}), ("warned", {}), ("tr", {}), ("stories", []), ("health", {}), ("digest", {}), ("ai", {}), ("runs", {})):
             if not isinstance(self.data.get(key), type(default)):
                 self.data[key] = default
 
@@ -1083,44 +1040,7 @@ def highlight_saudi(escaped_text: str) -> str:
     return _SAUDI_WORD.sub(mark, escaped_text)
 
 
-POST_ICONS = {"tg": "📡", "bsky": "🦋"}
-
-
-def format_world(article: Article, cfg: dict) -> str:
-    """رسالة قسم "دول ورؤساء": أعلام الدول المذكورة، النص بالعربية، ثم الأصل والمصدر."""
-    published_riyadh = publication_datetime_riyadh(article)
-    shown_ar = article.title_ar if article.translated else None
-    subjects = article.subjects[: int((cfg.get("world", {}) or {}).get("max_flags", 3))]
-    flags = " ".join(f for f in (geo.flag(i) for i in subjects) if f)
-    names = " • ".join(watch.name_ar(i) for i in subjects)
-    head = f"{flags or '🌐'} <b>{html.escape(names or 'دول ورؤساء')}</b>"
-    if published_riyadh is not None:
-        minutes = ((cfg.get("_now") or dt.datetime.now(RIYADH)) - published_riyadh).total_seconds() / 60
-        if minutes <= float(cfg.get("flash_minutes", 20)):
-            head = "⚡ <b>فوري</b>  •  " + head
-    lines = [head, LINE, f"📰 <b>{html.escape((shown_ar or article.title)[:900])}</b>"]
-    if shown_ar:
-        lines += ["", f"🔤 <i>{html.escape(article.title[:900])}</i>"]
-    lines.append(LINE)
-    lines.append(f"{POST_ICONS.get(article.origin, '🏛')} {html.escape(article.source_name or article.domain)}")
-    if published_riyadh:
-        when = "🕒 " + published_riyadh.strftime("%Y-%m-%d • %H:%M") + " (الرياض)"
-        age = age_text(article, cfg.get("_now"))
-        lines.append((f"⏱ <b>{age}</b>  •  " if age else "") + when)
-    link_text = "عرض المنشور" if article.origin in watch.POST_ORIGINS else "اقرأ الخبر كاملًا"
-    lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">{link_text}</a>')
-    others = unique_sources(article)
-    if others:
-        links = [f'<a href="{html.escape(o.url, quote=True)}">{html.escape(o.source_name[:40])}</a>' for o in others[:4]]
-        lines.append("📎 نشره أيضًا: " + "، ".join(links))
-    tags = ["#دول_ورؤساء"] + [hashtag(watch.name_ar(i)) for i in subjects]
-    lines += ["", " ".join(t for t in tags if t)]
-    return "\n".join(lines)
-
-
 def format_message(article: Article, cfg: dict) -> str:
-    if article.section == "world":
-        return format_world(article, cfg)
     published_riyadh = publication_datetime_riyadh(article)
     shown_ar = article.title_ar if article.translated else None
     is_gulf = article.section == "gulf"
@@ -1163,13 +1083,11 @@ def format_message(article: Article, cfg: dict) -> str:
             lines[-1] = "⚡ <b>فوري</b>  •  " + lines[-1]
     lines.append(LINE)
     main_title = shown_ar or article.title
-    # منشورات تيليجرام و Bluesky نصوص كاملة لا عناوين: تُعرض بطولها
-    title_limit = 900 if article.origin in watch.POST_ORIGINS else 200
-    lines.append(f"📰 <b>{mark(html.escape(main_title[:title_limit]))}</b>")
+    lines.append(f"📰 <b>{mark(html.escape(main_title[:200]))}</b>")
     if article.summary:
         lines += ["", f"<blockquote>📝 {mark(html.escape(article.summary))}</blockquote>"]
     if shown_ar:
-        lines += ["", f"🔤 <i>{html.escape(article.title[:title_limit])}</i>"]
+        lines += ["", f"🔤 <i>{html.escape(article.title[:200])}</i>"]
     lines.append(LINE)
     lines.append(f"{topic_line}  •  ⭐ {article.breaking_score}  •  {label}")
     if article.tone in TONES:
@@ -1461,8 +1379,7 @@ def send_stories(chosen, cfg, state, tg, archive, ai, deadline) -> int:
     # الأقدم أولًا ليبقى ترتيب القناة زمنيًا
     chosen = sorted(chosen, key=lambda a: a.published.timestamp() if a.published else 0)
     for article in chosen:
-        if article.origin != "x" and article.origin not in watch.POST_ORIGINS and article.section != "world" \
-                and ai.available() and time.monotonic() < deadline:
+        if article.origin != "x" and ai.available() and time.monotonic() < deadline:
             info = ai.enrich(article.title, article.source_name, article.url, article.domain)
             if info:
                 if info["title_ar"] and needs_arabic_translation(article):
@@ -1508,18 +1425,15 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
         cfg["max_messages_per_run"] = gulf_max = int(limit)
         cfg["test_latest"] = True
     cfg = apply_saudi_focus(cfg)
-    cfg["_state"] = state
-    cfg["_resolve"] = not instant   # البحث عن حسابات القائمة على Bluesky في الفحص الواسع فقط
     archive = archive or Archive(ARCHIVE_DIR)
     now = now or dt.datetime.now(RIYADH)
     cfg["_now"] = now
 
     deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
-    watched = {"tg": fetch_telegram, "bsky": fetch_bluesky, "wfeeds": fetch_world_feeds}
-    default_fetchers = {"x": fetch_x, "feeds": fetch_feeds, **watched, "gnews": fetch_gnews,
-                        "gulf_gnews": fetch_gulf_gnews, "gdelt": fetch_gdelt, "gulf_gdelt": fetch_gulf_gdelt}
+    default_fetchers = {"x": fetch_x, "feeds": fetch_feeds, "gnews": fetch_gnews, "gulf_gnews": fetch_gulf_gnews,
+                        "gdelt": fetch_gdelt, "gulf_gdelt": fetch_gulf_gdelt}
     if instant:
-        default_fetchers = {"x": fetch_x, "feeds": fetch_feeds, **watched}
+        default_fetchers = {"x": fetch_x, "feeds": fetch_feeds}
     if fast:
         # الفحص السريع: أخبار Google و X فقط؛ GDELT أبطأ ويكفيه الفحص الكامل كل ساعة
         default_fetchers = {k: v for k, v in default_fetchers.items() if "gdelt" not in k}
@@ -1562,54 +1476,18 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
         if chosen:
             gulf_sent = send_stories(chosen, gcfg, state, tg, archive, ai, deadline)
 
-    # ---- القسم الثالث: دول ورؤساء (من المصادر المتابَعة فقط)
-    world_sent = 0
-    world_stories = []
-    world_cfg = cfg.get("world", {}) or {}
-    if world_cfg.get("enabled", True) and any(a.watch for a in articles):
-        matcher = watch.Matcher(compile_terms, world_cfg.get("leaders"))
-
-        def is_world(article):
-            if not article.watch or article.section != "saudi" or title_matches(article.title, pats):
-                return False  # ما يذكر السعودية أو الخليج مكانه قسمه
-            if gulf_cfg.get("enabled", True) and GULF.subjects(article.title, article.lang):
-                return False
-            article.subjects = matcher.subjects(article.title)
-            if article.subjects:
-                article.section = "world"
-            return bool(article.subjects)
-
-        wcfg = {**cfg, "saudi_focus": False, "max_per_subject": 0, "max_per_language": 99,
-                "max_per_language_overrides": {}, "regions": {"min_per_run": 0},
-                "max_messages_per_run": int(limit) if limit else int(world_cfg.get("max_messages", 4)),
-                "max_candidates": int(world_cfg.get("max_candidates", 25)),
-                "max_age_hours": min(float(cfg.get("max_age_hours", 6)), float(world_cfg.get("max_age_minutes", 30)) / 60)}
-        if not state.data["runs"].get("world_seed") and not tg.dry_run and not limit:
-            # أول تشغيل للقسم: ما هو منشور الآن يُعدّ مقروءًا، فلا تُغرق القناة بما سبق؛ الإرسال يبدأ مما يُنشر بعده
-            seeded = [a for a in articles if is_world(a)]
-            for article in seeded:
-                state.mark(article)
-            state.data["runs"]["world_seed"] = int(time.time())
-            logging.info("world section started: %d existing posts skipped", len(seeded))
-        else:
-            world_stories = build_stories(articles, wcfg, state, matcher.patterns, deadline, now, match=is_world)
-            chosen = select_clusters(world_stories, wcfg)
-            if chosen:
-                world_sent = send_stories(chosen, wcfg, state, tg, archive, ai, deadline)
-
     if not cfg.get("test_latest"):
         check_health(statuses, cfg, state, tg)
         maybe_send_digests(cfg, state, tg, archive, now)
-    logging.info("collected=%d saudi_stories=%d sent=%d gulf_stories=%d gulf_sent=%d world_stories=%d world_sent=%d "
-                 "sources=%s ai_calls_today=%s",
-                 len(articles), len(saudi), sent, len(gulf_stories), gulf_sent, len(world_stories), world_sent,
+    logging.info("collected=%d saudi_stories=%d sent=%d gulf_stories=%d gulf_sent=%d sources=%s ai_calls_today=%s",
+                 len(articles), len(saudi), sent, len(gulf_stories), gulf_sent,
                  {k: v[0] for k, v in statuses.items()}, state.data["ai"].get("calls", 0))
     ok_counts = {}
     for key, value in counts.items():
         group = key.split(":")[0]
         ok_counts[group] = ok_counts.get(group, 0) + value
     logging.info("articles per source: %s", ok_counts)
-    return sent + gulf_sent + world_sent
+    return sent + gulf_sent
 
 
 def pick_mode(cfg: dict, state: State, now_ts: float | None = None) -> str:
