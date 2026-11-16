@@ -5,13 +5,16 @@ import datetime as dt
 import email.utils
 import hashlib
 import html
+import inspect
 import json
 import logging
 import os
 import re
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
@@ -50,7 +53,10 @@ TOPIC_KEYWORDS = {
                "مونديال", "كأس العالم", "فورمولا", "ملاكمة", "غولف", "تنس", "رونالدو", "الهلال", "أولمبي",
                "football", "soccer", "league", "match", "cup", "club", "player", "coach", "fifa", "world cup",
                "formula 1", "f1", "grand prix", "boxing", "golf", "tennis", "ronaldo", "al hilal", "al nassr",
-               "al ittihad", "esports", "wwe", "olympic*", "sport", "sports"],
+               "al ittihad", "esports", "wwe", "olympic*", "sport", "sports",
+               "مواجهة", "ودية", "تشكيلة", "ركلة", "دوري روشن", "الأخضر السعودي", "كرة السلة", "كرة اليد",
+               "vs", "liga", "timnas", "pertandingan", "piala", "sepak bola", "futbol", "fútbol", "futebol",
+               "fußball", "fussball", "calcio", "partido", "selección", "футбол", "матч", "сборная"],
     "religion": ["حج", "حاج", "حجاج", "عمرة", "معتمر", "المسجد الحرام", "المسجد النبوي", "الحرمين", "مكة",
                  "المدينة المنورة", "إسلام", "إسلامي", "مسلم", "رمضان", "عيد الفطر", "عيد الأضحى", "كعبة", "مسجد",
                  "hajj", "umrah", "pilgrim*", "mecca", "makkah", "medina", "madinah", "islam*", "muslim*",
@@ -117,6 +123,13 @@ SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.c
     "thejakartapost.com": 78, "dawn.com": 78, "xinhuanet.com": 70, "cgtn.com": 68,
     "tass.com": 67, "rt.com": 66}
 SOURCE_NAMES_AR = {"x": "منصة X", "gnews": "أخبار Google", "gdelt": "قاعدة GDELT", "feeds": "المصادر المباشرة"}
+# مواقع رياضية: خبرها رياضي ولو لم يحمل العنوان كلمة رياضية صريحة
+SPORTS_DOMAINS = {"filgoal.com", "kooora.com", "yallakora.com", "goal.com", "espn.com", "skysports.com", "marca.com",
+                  "as.com", "lequipe.fr", "gazzetta.it", "arriyadiyah.com", "beinsports.com", "btolat.com",
+                  "nobartv.co.id", "bola.com", "bola.net", "onefootball.com", "transfermarkt.com", "fifa.com",
+                  "the-afc.com", "saff.com.sa", "spl.com.sa", "eurosport.com", "mundodeportivo.com", "kicker.de",
+                  "championat.com", "sports.ru", "365scores.com", "sofascore.com"}
+_SPORTS_DOMAIN_HINT = re.compile(r"(?<!tran)sport|football|futbol|soccer|kooora|yallakora|goal")
 DEFAULT_REGION_PRIORITY = ["east_asia", "southeast_asia", "south_asia", "central_asia", "africa", "latin_america",
                            "oceania", "mideast", "europe", "north_america", "arab"]
 NO_SPACE_LANGS = {"zh", "ja", "ko", "th"}
@@ -237,6 +250,13 @@ def classify_topic(text: str) -> str:
     return best
 
 
+def is_sports_domain(domain: str) -> bool:
+    d = (domain or "").lower()
+    if any(d == key or d.endswith("." + key) for key in SPORTS_DOMAINS):
+        return True
+    return bool(_SPORTS_DOMAIN_HINT.search(d.rsplit(".", 1)[0]))
+
+
 # ---------------------------------------------------------------- المطابقة والنقاط
 _BOUNDARY_SCRIPTS = re.compile(r"[a-z\u00c0-\u024f\u0370-\u03ff\u0400-\u04ff\u0530-\u058f\u10a0-\u10ff]")
 
@@ -301,7 +321,9 @@ def breaking_score(article: Article, now: dt.datetime | None = None) -> int:
             score += 20
         elif age_minutes <= 120:
             score += 8
-    return min(score, 100)
+    if article.tier == "other" and article.source_score <= 40:
+        score -= 10  # مصدر غير معروف: لا يُساوى بالمصادر الموثوقة
+    return max(0, min(score, 100))
 
 
 def assign_tier(article: Article, cfg: dict) -> str:
@@ -352,16 +374,18 @@ def needs_arabic_translation(article: Article) -> bool:
     return article.lang in {"ur", "fa"} or not is_mostly_arabic(article.title)
 
 
-def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
+def translate_to_arabic(text: str, timeout: int = 10, source: str = "auto") -> str | None:
     if not text.strip():
         return None
+    source = source or "auto"
     api_key = os.getenv("GOOGLE_TRANSLATE_API_KEY")
     if api_key:
         response = http_get(
             "https://translation.googleapis.com/language/translate/v2",
             timeout=timeout,
             headers={"x-goog-api-key": api_key},
-            params={"q": text[:5000], "target": "ar", "format": "text"},
+            params={"q": text[:5000], "target": "ar", "format": "text",
+                    **({"source": source} if source != "auto" else {})},
         )
         if response is not None and response.status_code == 200:
             try:
@@ -372,7 +396,7 @@ def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
                 logging.warning("Google Cloud Translation response could not be parsed: %s", exc)
         elif response is not None:
             logging.warning("Google Cloud Translation returned HTTP %s", response.status_code)
-    params = {"client": "gtx", "sl": "auto", "tl": "ar", "dt": "t", "q": text[:5000]}
+    params = {"client": "gtx", "sl": source, "tl": "ar", "dt": "t", "q": text[:5000]}
     for endpoint in (
         "https://translate.googleapis.com/translate_a/single",
         "https://translate.google.com/translate_a/single",
@@ -394,34 +418,122 @@ def translate_to_arabic(text: str, timeout: int = 10) -> str | None:
     return None
 
 
-def translate_many(titles: list, translate=None, batch_size: int = 12) -> list:
+_LATIN_WORD = re.compile(r"[A-Za-zÀ-ɏ]{4,}")
+_AR_WORD = re.compile(r"[ء-يپڤ]{2,}")
+_AR_SOUND = {"ب": "b", "پ": "b", "ت": "t", "ط": "t", "ث": "s", "ج": "j", "غ": "j", "ح": "h", "ه": "h", "خ": "k",
+             "ك": "k", "ق": "k", "د": "d", "ض": "d", "ذ": "z", "ز": "z", "ظ": "z", "ر": "r", "س": "s", "ص": "s",
+             "ش": "s", "ف": "f", "ڤ": "f", "ل": "l", "م": "m", "ن": "n"}
+_LATIN_SOUND = {"b": "b", "p": "b", "t": "t", "j": "j", "g": "j", "h": "h", "k": "k", "c": "k", "q": "k", "x": "ks",
+                "d": "d", "z": "z", "r": "r", "s": "s", "f": "f", "v": "f", "l": "l", "m": "m", "n": "n"}
+
+
+def _squeeze(chars) -> str:
+    out = []
+    for c in chars:
+        if c and (not out or out[-1] != c):
+            out.append(c)
+    return "".join(out)
+
+
+def _latin_skeleton(word: str) -> str:
+    word = unicodedata.normalize("NFKD", word.lower())
+    for pair, sound in (("sh", "s"), ("ch", "s"), ("kh", "k"), ("gh", "g"), ("ph", "f"), ("th", "t")):
+        word = word.replace(pair, sound)
+    return _squeeze("".join(_LATIN_SOUND.get(c, "") for c in word))
+
+
+def _arabic_skeleton(word: str) -> str:
+    for prefix in _AR_PREFIXES:
+        if word.startswith(prefix) and len(word) > len(prefix) + 2:
+            word = word[len(prefix):]
+            break
+    return _squeeze(_AR_SOUND.get(c, "") for c in word)
+
+
+def looks_transliterated(original: str, arabic: str) -> bool:
+    """هل "الترجمة" مجرد كتابة للكلمات الأجنبية بحروف عربية (بيريتا هاريان...) لا ترجمة لمعناها؟
+
+    تُقارَن الحروف الساكنة لكل كلمة أجنبية بكلمات النص العربي؛ فإن طابقت معظمها فالنص منقول صوتيًا.
+    """
+    if not original or not arabic:
+        return False
+    latin_all = {k for k in (_latin_skeleton(w) for w in _LATIN_WORD.findall(original)) if len(k) >= 2}
+    latin = [k for k in (_latin_skeleton(w) for w in _LATIN_WORD.findall(original)) if len(k) >= 3]
+    arab = [k for k in (_arabic_skeleton(w) for w in _AR_WORD.findall(norm_ar(arabic))) if len(k) >= 2]
+    if len(latin) < 4 or not arab:
+        return False
+
+    def same(a: str, b: str) -> bool:
+        return a == b or SequenceMatcher(None, a, b).ratio() >= 0.8
+
+    forward = sum(1 for k in latin if any(same(k, a) for a in arab)) / len(latin)
+    # الترجمة الحقيقية فيها كلمات عربية لا مقابل صوتي لها (أفعال وحروف)، والنقل الصوتي يكاد يخلو منها
+    backward = sum(1 for a in arab if any(same(a, k) for k in latin_all)) / len(arab)
+    return forward >= 0.7 and backward >= 0.85
+
+
+def _translate(translate, text: str, source: str = ""):
+    """ينادي دالة الترجمة مع لغة المصدر إن كانت تقبلها."""
+    if source and re.fullmatch(r"[a-z]{2,3}", source):
+        try:
+            accepts = "source" in inspect.signature(translate).parameters
+        except (TypeError, ValueError):
+            accepts = False
+        if accepts:
+            return translate(text, source=source)
+    return translate(text)
+
+
+def translate_many(titles: list, translate=None, batch_size: int = 12, langs: list | None = None) -> list:
     """يترجم عدة عناوين في طلب واحد (سطر لكل عنوان) بدل طلب لكل عنوان، فلا تحجبنا خدمة الترجمة.
 
+    إن أُعطيت langs (لغة كل عنوان) جُمعت عناوين كل لغة في طلب خاص بها: خلط اللغات في طلب واحد يُربك
+    كشف اللغة فتُنقل الكلمات بحروف عربية دون ترجمة. وما خرج منقولًا صوتيًا يُعاد منفردًا بلغته الصريحة.
     يعيد قائمة بطول titles؛ العنصر None حيث تعذرت الترجمة.
     """
     translate = translate or translate_to_arabic
     out = [None] * len(titles)
+    clean = [re.sub(r"\s+", " ", t).strip() for t in titles]
+    groups = {}
+    for index in range(len(titles)):
+        groups.setdefault((langs[index] if langs else "") or "", []).append(index)
     failures = 0
-    for start in range(0, len(titles), batch_size):
-        if failures >= 2:
-            break  # الخدمة متعثرة: نكفّ عن المحاولة في هذا الفحص
-        chunk = [re.sub(r"\s+", " ", t).strip() for t in titles[start:start + batch_size]]
-        result = translate("\n".join(chunk))
-        parts = [part.strip() for part in (result or "").split("\n") if part.strip()]
-        if len(parts) == len(chunk):
-            out[start:start + len(chunk)] = parts
-            failures = 0
-            continue
-        if result is None:
-            failures += 1
-            continue
-        # عدد الأسطر اختلف: نترجم عناوين هذه المجموعة واحدًا واحدًا
-        for offset, title in enumerate(chunk):
-            single = translate(title)
-            if single is None:
+    for indexes in groups.values():
+        for start in range(0, len(indexes), batch_size):
+            if failures >= 2:
+                break  # الخدمة متعثرة: نكفّ عن المحاولة في هذا الفحص
+            batch = indexes[start:start + batch_size]
+            chunk = [clean[i] for i in batch]
+            result = translate("\n".join(chunk))
+            parts = [part.strip() for part in (result or "").split("\n") if part.strip()]
+            if len(parts) == len(chunk):
+                for i, part in zip(batch, parts):
+                    out[i] = part
+                failures = 0
+                continue
+            if result is None:
                 failures += 1
-                break
-            out[start + offset] = single.strip()
+                continue
+            # عدد الأسطر اختلف: نترجم عناوين هذه المجموعة واحدًا واحدًا
+            for i in batch:
+                single = translate(clean[i])
+                if single is None:
+                    failures += 1
+                    break
+                out[i] = single.strip()
+    retries = 0
+    for i, translated in enumerate(out):
+        if not translated or not looks_transliterated(clean[i], translated):
+            continue
+        fixed = None
+        if retries < 8 and failures < 2:
+            retries += 1
+            words = clean[i].split()
+            capitalised = sum(1 for w in words if w[:1].isupper()) >= 0.7 * len(words)
+            # العناوين المكتوبة بحرف كبير لكل كلمة تُعامل كأسماء أعلام فلا تُترجم
+            fixed = _translate(translate, clean[i].lower() if capitalised else clean[i], langs[i] if langs else "")
+        # إن بقيت منقولة صوتيًا فالعنوان الأصلي أصدق من ترجمة بلا معنى
+        out[i] = fixed.strip() if fixed and not looks_transliterated(clean[i], fixed) else None
     return out
 
 
@@ -1026,18 +1138,8 @@ _SAUDI_WORD = re.compile(r"(?<!\w)(?:[وفبلك]|لل|ال|وال|بال)*سع�
 
 
 def highlight_saudi(escaped_text: str) -> str:
-    """يميّز كلمة "السعودية" ومشتقاتها: دائرة خضراء قبل أول ورود، وخط تحت كل ورود.
-
-    تلقرام لا يدعم تلوين النص، فالدائرة الخضراء والخط هما البديل المتاح.
-    """
-    state = {"first": True}
-
-    def mark(match):
-        dot = "🟢" if state["first"] else ""
-        state["first"] = False
-        return f"{dot}<u>{match.group(0)}</u>"
-
-    return _SAUDI_WORD.sub(mark, escaped_text)
+    """يميّز كلمة "السعودية" ومشتقاتها بخط تحتها (تلقرام لا يدعم تلوين النص)."""
+    return _SAUDI_WORD.sub(lambda match: f"<u>{match.group(0)}</u>", escaped_text)
 
 
 def format_message(article: Article, cfg: dict) -> str:
@@ -1066,46 +1168,45 @@ def format_message(article: Article, cfg: dict) -> str:
         lines.append("#إكس")
         return "\n".join(lines)
 
+    # الشكل المختصر: العنوان، ثم سطر (الموضوع · النقاط · المصدر)، ثم (الوقت · الرابط)، ثم الوسوم
+    now = cfg.get("_now") or dt.datetime.now(RIYADH)
     breaking = cfg.get("breaking_mode", False) and article.breaking_score >= cfg.get("breaking_threshold", 78)
-    label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "⚪ مصدر آخر")
-    topic_line = f"{TOPIC_EMOJI.get(article.topic, '🗞')} <b>{TOPIC_LABELS.get(article.topic, 'عام')}</b>"
-    if is_gulf:
-        flags = " ".join(GULF_FLAGS[i] for i in article.subjects)
-        names = "، ".join(gulf.NAMES_AR[i] for i in article.subjects)
-        lines.append(f"{flags} <b>خبر خليجي — {names}</b>")
-    elif breaking:
-        lines.append("🚨🇸🇦 <b>عاجل</b>")
-    else:
-        lines.append("🇸🇦 <b>خبر عن 🟢 السعودية</b>")
+    flags = " ".join(GULF_FLAGS[i] for i in article.subjects) if is_gulf else "🇸🇦"
+    prefix = "🚨 <b>عاجل</b> · " if breaking and not is_gulf else ""
     if published_riyadh is not None:
-        minutes = ((cfg.get("_now") or dt.datetime.now(RIYADH)) - published_riyadh).total_seconds() / 60
+        minutes = (now - published_riyadh).total_seconds() / 60
         if minutes <= float(cfg.get("flash_minutes", 20)):
-            lines[-1] = "⚡ <b>فوري</b>  •  " + lines[-1]
-    lines.append(LINE)
+            prefix = "⚡ <b>فوري</b> · " + prefix
     main_title = shown_ar or article.title
-    lines.append(f"📰 <b>{mark(html.escape(main_title[:200]))}</b>")
+    lines.append(f"{prefix}{flags} <b>{mark(html.escape(main_title[:200]))}</b>".strip())
     if article.summary:
-        lines += ["", f"<blockquote>📝 {mark(html.escape(article.summary))}</blockquote>"]
-    if shown_ar:
-        lines += ["", f"🔤 <i>{html.escape(article.title[:200])}</i>"]
-    lines.append(LINE)
-    lines.append(f"{topic_line}  •  ⭐ {article.breaking_score}  •  {label}")
+        lines.append(f"<blockquote>📝 {mark(html.escape(article.summary))}</blockquote>")
+    if shown_ar and cfg.get("show_original_title", False):
+        lines.append(f"🔤 <i>{html.escape(article.title[:200])}</i>")
+    source = html.escape(article.source_name or article.domain)
+    source_flag = geo.flag(article.iso)
+    topic = f"{TOPIC_EMOJI.get(article.topic, '🗞')} {TOPIC_LABELS.get(article.topic, 'عام')}"
+    lines.append(" · ".join([topic, f"⭐ {article.breaking_score}", f"{source_flag} {source}".strip()]))
+    extra = []
+    if article.tier != "other":
+        label = cfg.get("tiers", {}).get(article.tier, {}).get("label", "")
+        if label:
+            extra.append(label)
     if article.tone in TONES:
-        lines.append(f"{TONE_EMOJI[article.tone]} النبرة: {TONES[article.tone]}")
-    lines.append(f"🏛 {html.escape(article.source_name or article.domain)}")
-    if article.country_ar:
-        place = html.escape(article.country_ar)
-        if article.region != "unknown":
-            place += " — " + geo.region_label(article.region)
-        lines.append(f"{geo.flag(article.iso) or '🌐'} {place}")
-    if when:
-        lines.append(when)
-    lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر كاملًا</a>')
+        extra.append(f"{TONE_EMOJI[article.tone]} النبرة: {TONES[article.tone]}")
+    if extra:
+        lines.append(" · ".join(extra))
+    link = f'🔗 <a href="{html.escape(article.url, quote=True)}">اقرأ الخبر</a>'
+    if published_riyadh is not None:
+        # الوقت بتوقيت الرياض؛ والتاريخ يُذكر فقط إن لم يكن الخبر من اليوم
+        same_day = published_riyadh.date() == now.astimezone(RIYADH).date()
+        link = "🕒 " + published_riyadh.strftime("%H:%M" if same_day else "%d-%m • %H:%M") + " · " + link
+    lines.append(link)
     others = unique_sources(article)
     if others:
         links = [f'<a href="{html.escape(o.url, quote=True)}">{html.escape(o.source_name[:40])}</a>' for o in others[:4]]
-        extra = f" و{len(others) - 4} غيرها" if len(others) > 4 else ""
-        lines.append("📎 نشره أيضًا: " + "، ".join(links) + extra)
+        more = f" و{len(others) - 4} غيرها" if len(others) > 4 else ""
+        lines.append("📎 نشره أيضًا: " + "، ".join(links) + more)
     if is_gulf:
         # وسوم الخبر الخليجي تدل على الدولة موضوع الخبر، لا على دولة المصدر
         tags = ["#الخليج"] + [hashtag("أخبار " + gulf.NAMES_AR[i]) for i in article.subjects]
@@ -1114,7 +1215,7 @@ def format_message(article: Article, cfg: dict) -> str:
         tags = [hashtag(TOPIC_TAGS.get(article.topic, "عام")), hashtag(article.country_tag)]
         if article.region != "unknown":
             tags.append(hashtag(geo.region_label(article.region)))
-    lines += ["", " ".join(t for t in tags if t)]
+    lines.append(" ".join(t for t in tags if t))
     return "\n".join(lines)
 
 
@@ -1171,7 +1272,8 @@ def add_arabic_titles(candidates, cfg, state, deadline, translate=translate_to_a
             pending.append(article)
     if not pending or time.monotonic() >= deadline:
         return
-    results = translate_many([a.title for a in pending], translate, int(cfg.get("translate_batch", 12)))
+    results = translate_many([a.title for a in pending], translate, int(cfg.get("translate_batch", 12)),
+                             langs=[a.lang for a in pending])
     for article, translated in zip(pending, results):
         if translated and norm_title(translated) != norm_title(article.title):
             state.cache_translation(article.title, translated)
@@ -1188,7 +1290,7 @@ def score_and_focus(candidates, cfg, pats, now=None):
     out = []
     for article in candidates:
         text = article.all_text()
-        article.topic = classify_topic(text)
+        article.topic = "sports" if is_sports_domain(article.domain) else classify_topic(text)
         article.relevance_score = compute_relevance(article, pats)
         article.breaking_score = breaking_score(article, now_utc)
         article.tok_orig = story_tokens(article.title, article.lang)

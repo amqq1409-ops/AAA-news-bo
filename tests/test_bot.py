@@ -207,18 +207,25 @@ class MessageTests(unittest.TestCase):
         a.topic, a.summary, a.tone = "energy", "ملخص من جملتين.", "positive"
         msg = nb.format_message(a, CFG)
         self.assertIn("#طاقة #اليابان #شرق_آسيا", msg)
-        self.assertIn("🇯🇵 اليابان — شرق آسيا", msg)
+        self.assertIn("🛢 طاقة · ⭐ 0 · 🇯🇵 Asahi", msg)
+        self.assertTrue(msg.startswith("🇸🇦 <b>"))
+        self.assertNotIn("━", msg)
+        self.assertNotIn("\n\n", msg)
+        self.assertNotIn("مصدر آخر", msg)
+        self.assertNotIn("Toyota", msg)                # العنوان الأصلي لا يُكرَّر تحت الترجمة
         self.assertIn("📝 ملخص من جملتين.", msg)
-        self.assertIn("أرامكو 🟢<u>السعودية</u> وتويوتا", msg)
+        self.assertIn("أرامكو <u>السعودية</u> وتويوتا", msg)
         self.assertIn("🟢 النبرة: إيجابي", msg)
-        self.assertIn("&lt;b&gt;Aramco&lt;/b&gt; &amp;", msg)
+        self.assertLessEqual(len(msg.split("\n")), 6)
+        original = nb.format_message(a, {**CFG, "show_original_title": True})
+        self.assertIn("&lt;b&gt;Aramco&lt;/b&gt; &amp;", original)
         self.assertLess(len(msg), 4096)
 
     def test_saudi_word_highlight(self):
         out = nb.highlight_saudi("ولي العهد السعودي يبحث مع وزير سعودي مستقبل السعودية")
-        self.assertEqual(out.count("🟢"), 1)          # الدائرة الخضراء مرة واحدة
-        self.assertEqual(out.count("<u>"), 3)          # والخط تحت كل ورود
-        self.assertIn("🟢<u>السعودي</u>", out)
+        self.assertNotIn("🟢", out)                    # لا دائرة وسط العنوان
+        self.assertEqual(out.count("<u>"), 3)          # خط تحت كل ورود
+        self.assertIn("<u>السعودي</u>", out)
         self.assertEqual(nb.highlight_saudi("أخبار قطر"), "أخبار قطر")
 
     def test_flags(self):
@@ -226,7 +233,7 @@ class MessageTests(unittest.TestCase):
         self.assertEqual(geo.flag_for_name("كينيا"), "🇰🇪")
         self.assertEqual(geo.flag(""), "")
         unknown = art("Saudi Arabia news item", "example.com")
-        self.assertIn("🏛 example.com", nb.format_message(unknown, CFG))
+        self.assertIn("· example.com", nb.format_message(unknown, CFG))
 
     def test_hashtag(self):
         self.assertEqual(nb.hashtag("عُمان"), "#عمان")
@@ -424,9 +431,9 @@ class GulfTests(unittest.TestCase):
             self.assertFalse(any("🌴" in m for m in tg.sent))   # لا رسالة فاصلة: كل خبر فوري بذاته
             before, after = tg.sent[:1], tg.sent[1:]
             self.assertEqual(len(before), 1)
-            self.assertIn("خبر عن 🟢 السعودية", before[0])   # خبر السعودية وقطر في قسم السعودية
-            self.assertTrue(all("خبر خليجي —" in m for m in after))
-            self.assertEqual(sum("خبر خليجي — الإمارات" in m for m in after), 3)   # حد الدولة الواحدة
+            self.assertTrue(before[0].startswith("🇸🇦 <b>"))   # خبر السعودية وقطر في قسم السعودية
+            self.assertTrue(all(m[:2] in nb.GULF_FLAGS.values() for m in after))   # الخبر الخليجي يبدأ بعلم دولته
+            self.assertEqual(sum(m.startswith("🇦🇪") for m in after), 3)   # حد الدولة الواحدة
             self.assertEqual(sum("#أخبار_الكويت" in m for m in after), 1)
             self.assertEqual(sum("#أخبار_عمان" in m for m in after), 1)
             self.assertTrue(all("#الخليج" in m for m in after))
@@ -501,7 +508,11 @@ class FreshAndFastTests(unittest.TestCase):
     def test_age_text(self):
         self.assertEqual(nb.age_text(art("x", minutes_ago=12), NOW), "منذ 12 دقيقة")
         self.assertEqual(nb.age_text(art("x", minutes_ago=0), NOW), "الآن")
-        self.assertIn("⏱", nb.format_message(art("Saudi Arabia opens metro", minutes_ago=12), {"_now": NOW}))
+        # الرسالة تحمل وقت النشر الثابت لا "منذ..." الذي يتقادم؛ والتاريخ يظهر لخبر الأمس فقط
+        msg = nb.format_message(art("Saudi Arabia opens metro", minutes_ago=12), {"_now": NOW})
+        self.assertNotIn("منذ", msg)
+        self.assertIn("🕒 13-11 • 23:53 · 🔗", msg)
+        self.assertIn("🕒 00:03 · 🔗", nb.format_message(art("Saudi Arabia opens metro", minutes_ago=2), {"_now": NOW}))
 
     def test_messages_sent_oldest_first(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -511,7 +522,7 @@ class FreshAndFastTests(unittest.TestCase):
                 art("Saudi Aramco reports quarterly oil profit rise", "reuters.com", minutes_ago=90),
             ]
             run_with(items, state, tg, tmp)
-            news = [m for m in tg.sent if "📰" in m]
+            news = [m for m in tg.sent if "🔗" in m]
             self.assertEqual(len(news), 2)
             self.assertIn("Aramco", news[0])
 
@@ -589,3 +600,75 @@ class DirectFeedTests(unittest.TestCase):
             self.assertEqual(sent, 1)
             self.assertIn("⚡", tg.sent[0])
             self.assertIn("metro", tg.sent[0])
+
+
+class TranslationQualityTests(unittest.TestCase):
+    ID_TITLE = "Berita Harian Hasil Pertandingan Arab Saudi Vs Uzbekistan Terkini Hari Ini"
+    ID_BAD = "بيريتا هاريان هاسيل بيرتاندينجان العربي السعودي vs أوزبكستان تيركيني هاري إيني"
+    ID_GOOD = "آخر نتائج مباراة السعودية وأوزبكستان اليوم"
+
+    def test_detects_transliteration_but_not_real_translation(self):
+        self.assertTrue(nb.looks_transliterated(self.ID_TITLE, self.ID_BAD))
+        self.assertFalse(nb.looks_transliterated(self.ID_TITLE, self.ID_GOOD))
+        for original, arabic in FAKE_AR.items():
+            self.assertFalse(nb.looks_transliterated(original, arabic))
+        self.assertFalse(nb.looks_transliterated(
+            "Cristiano Ronaldo scores twice as Al Nassr beat Al Hilal in Riyadh derby",
+            "كريستيانو رونالدو يسجل هدفين في فوز النصر على الهلال في ديربي الرياض"))
+        self.assertFalse(nb.looks_transliterated(
+            "Saudi Aramco and Toyota sign hydrogen partnership agreement in Tokyo",
+            "أرامكو السعودية وتويوتا توقعان اتفاقية شراكة في الهيدروجين بطوكيو"))
+
+    def test_transliterated_title_is_retried_alone_with_its_language(self):
+        calls = []
+
+        def translate(text, source="auto"):
+            calls.append((text, source))
+            if source == "id":
+                return self.ID_GOOD
+            return "\n".join(self.ID_BAD if line == self.ID_TITLE else "ترجمة" for line in text.split("\n"))
+
+        out = nb.translate_many([self.ID_TITLE, "Saudi news"], translate, langs=["id", "en"])
+        self.assertEqual(out, [self.ID_GOOD, "ترجمة"])
+        self.assertEqual(calls[0], (self.ID_TITLE, "auto"))        # كل لغة في طلب خاص بها
+        self.assertEqual(calls[-1], (self.ID_TITLE.lower(), "id"))  # ثم إعادة بلغتها الصريحة
+
+    def test_still_transliterated_keeps_original_title(self):
+        out = nb.translate_many([self.ID_TITLE], lambda text: self.ID_BAD, langs=["id"])
+        self.assertEqual(out, [None])
+
+    def test_languages_are_not_mixed_in_one_request(self):
+        calls = []
+
+        def translate(text):
+            calls.append(text)
+            return "\n".join("ع" for _ in text.split("\n"))
+
+        nb.translate_many(["a", "b", "c", "d"], translate, langs=["id", "ja", "id", "ja"])
+        self.assertEqual(calls, ["a\nc", "b\nd"])
+
+
+class SportsTopicTests(unittest.TestCase):
+    def test_sports_site_and_keywords(self):
+        self.assertTrue(nb.is_sports_domain("filgoal.com"))
+        self.assertTrue(nb.is_sports_domain("www.skysports.com"))
+        self.assertFalse(nb.is_sports_domain("transport.gov.sa"))
+        self.assertFalse(nb.is_sports_domain("reuters.com"))
+        self.assertEqual(nb.classify_topic("Arab Saudi vs Uzbekistan"), "sports")
+        winger = art("شكوك حول مشاركة جناح السعودية أمام أوزبكستان", "filgoal.com", "ar")
+        pats = nb.compile_terms(CFG["title_must_match_any"])
+        kept = nb.score_and_focus([winger], CFG, pats, NOW)
+        self.assertEqual(kept[0].topic, "sports")
+
+    def test_unknown_source_scores_below_known_source(self):
+        pats = nb.compile_terms(CFG["title_must_match_any"])
+        unknown = art("Saudi Arabia signs investment deal", "nobody-knows.example")
+        known = art("Saudi Arabia signs investment deal", "reuters.com")
+        for a in (unknown, known):
+            nb.assign_tier(a, CFG)
+        nb.score_and_focus([unknown, known], CFG, pats, NOW)
+        self.assertLess(unknown.breaking_score, known.breaking_score)
+
+
+if __name__ == "__main__":
+    unittest.main()
