@@ -523,30 +523,7 @@ world:
     timeout_sec: 10
     channels:
       - {id: AjaNews, name: "الجزيرة عاجل", lang: ar}
-      - {id: AlArabiya, name: "AlArabiya", lang: ar}
-      - {id: Alarabiya_Breaking, name: "Alarabiya_Breaking", lang: ar}
-      - {id: alarabiyabreaking, name: "alarabiyabreaking", lang: ar}
-      - {id: alarabiya_ar, name: "alarabiya_ar", lang: ar}
-      - {id: AlHadath, name: "AlHadath", lang: ar}
-      - {id: AlHadath_Brk, name: "AlHadath_Brk", lang: ar}
-      - {id: alhadath_brk, name: "alhadath_brk", lang: ar}
-      - {id: SkyNewsArabia, name: "SkyNewsArabia", lang: ar}
-      - {id: SkyNewsArabia_B, name: "SkyNewsArabia_B", lang: ar}
-      - {id: skynewsarabiabreaking, name: "skynewsarabiabreaking", lang: ar}
-      - {id: skynewsarabia_brk, name: "skynewsarabia_brk", lang: ar}
-      - {id: Alarabytv_BRK, name: "Alarabytv_BRK", lang: ar}
-      - {id: AJABreaking, name: "AJABreaking", lang: ar}
-      - {id: ajanews_brk, name: "ajanews_brk", lang: ar}
-      - {id: AsharqNews, name: "AsharqNews", lang: ar}
-      - {id: AsharqNewsBrk, name: "AsharqNewsBrk", lang: ar}
-      - {id: RTarabic, name: "RTarabic", lang: ar}
-      - {id: bbcarabic, name: "bbcarabic", lang: ar}
-      - {id: cnnarabic, name: "cnnarabic", lang: ar}
-      - {id: Reuters, name: "Reuters", lang: ar}
-      - {id: AJEnglish, name: "AJEnglish", lang: ar}
-      - {id: spagov, name: "spagov", lang: ar}
-      - {id: France24_ar, name: "France24_ar", lang: ar}
-      - {id: dw_arabic, name: "dw_arabic", lang: ar}
+      - {id: AlArabiya, name: "العربية", lang: ar}
       - {id: AlarabyTelevision, name: "العربي", lang: ar}
 
   bluesky:
@@ -572,6 +549,7 @@ world:
       - {name: "ABC News", url: "https://abcnews.go.com/abcnews/internationalheadlines", lang: en, iso: US}
       - {name: "NBC News", url: "https://feeds.nbcnews.com/nbcnews/public/world", lang: en, iso: US}
       - {name: "Al Jazeera English", url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, iso: QA}
+      - {name: "سكاي نيوز عربية", url: "https://www.skynewsarabia.com/rss", lang: ar, iso: AE}
       - {name: "CGTN", url: "https://www.cgtn.com/subscribe/rss/section/world.xml", lang: en, iso: CN}
       - {name: "Drop Site", url: "https://www.dropsitenews.com/feed", lang: en, iso: US}
       - {name: "Daily Caller", url: "https://dailycaller.com/feed/", lang: en, iso: US}
