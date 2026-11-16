@@ -479,3 +479,78 @@ direct_feeds:
     - {name: "OilPrice", url: "https://oilprice.com/rss/main", lang: en, iso: US}
     - {name: "The Hindu World", url: "https://www.thehindu.com/news/international/feeder/default.rss", lang: en, iso: IN}
     - {name: "SCMP World", url: "https://www.scmp.com/rss/5/feed", lang: en, iso: HK}
+
+# قسم "دول ورؤساء": منشورات المصادر المتابَعة التي تذكر دولة أو رئيسًا، مترجمة وفورية.
+# المصادر مجانية (بديل عن قراءة X المدفوعة): قنوات تيليجرام، حسابات Bluesky، خلاصات رسمية وإخبارية.
+# ما يذكر السعودية أو الخليج من هذه المصادر يذهب إلى قسمه المعتاد.
+world:
+  enabled: true
+  max_messages: 4           # أقصى عدد رسائل هذا القسم في الفحص الواحد (الفحص كل دقيقة)
+  max_age_minutes: 30       # لا يُرسل إلا ما نُشر خلال آخر كذا دقيقة
+  max_candidates: 25
+  max_flags: 3              # أقصى عدد أعلام في رأس الرسالة
+  watchlist: watchlist.txt  # حسابات X التي يُبحث عنها على Bluesky
+
+  # أسماء الرؤساء والمسؤولين (تتغير مع الوقت: عدّلها بحرية). الرمز = الدولة التي يظهر علمها.
+  leaders:
+    US: [Trump, ترمب, ترامب, "=Vance", فانس, Rubio, روبيو, Hegseth, هيغسيث, Witkoff, ويتكوف]
+    RU: [Putin, بوتين, Lavrov, لافروف]
+    CN: ["Xi Jinping", "President Xi", "شي جين بينغ"]
+    IR: [Khamenei, خامنئي, Pezeshkian, بزشكيان, Araghchi, عراقجي]
+    IL: [Netanyahu, نتنياهو]
+    PS: ["Mahmoud Abbas", "محمود عباس"]
+    UA: [Zelensky, Zelenskyy, زيلينسكي]
+    GB: [Starmer, ستارمر, Burnham, بيرنهام]
+    FR: [Macron, ماكرون]
+    DE: ["=Merz", ميرتس]
+    IT: [Meloni, ميلوني]
+    TR: [Erdogan, Erdoğan, أردوغان]
+    SY: ["al-Sharaa", "=الشرع"]
+    EG: ["=Sisi", "al-Sisi", "=السيسي"]
+    IN: ["=Modi", "=مودي"]
+    JP: [Takaichi, تاكايتشي]
+    KP: ["Kim Jong", "كيم جونغ"]
+    CA: ["=Carney", "=كارني"]
+    BR: ["=Lula"]
+    AR: [Milei]
+    MX: [Sheinbaum]
+    VE: [Maduro, مادورو]
+    HU: [Orban, Orbán, أوربان]
+    EU: ["von der Leyen", "فون دير لاين"]
+
+  telegram:
+    enabled: true
+    timeout_sec: 10
+    channels:
+      - {id: AjaNews, name: "الجزيرة عاجل", lang: ar}
+      - {id: AlArabiya_Brk, name: "العربية عاجل", lang: ar}
+      - {id: SkyNewsArabia_Breaking, name: "سكاي نيوز عربية عاجل", lang: ar}
+      - {id: AlarabyTelevision, name: "العربي", lang: ar}
+
+  bluesky:
+    enabled: true
+    per_run: 30             # عدد الحسابات المقروءة في الفحص الواحد (بالتناوب)
+    parallel: 10
+    resolve_per_run: 50     # عدد حسابات القائمة التي يُبحث عنها على Bluesky في الفحص الواسع
+    min_followers: 1000     # لا يُعتمد الحساب إلا إذا كان موثّقًا أو له هذا العدد من المتابعين (ضد الانتحال)
+    retry_days: 14          # من لم يوجد يُعاد البحث عنه بعد كذا يوم
+    handles: []             # حسابات Bluesky تضاف يدويًا (مثل: name.bsky.social)
+
+  feeds:
+    enabled: true
+    parallel: 12
+    timeout_sec: 10
+    feeds:
+      # --- مصادر رسمية
+      - {name: "البيت الأبيض", url: "https://www.whitehouse.gov/news/feed/", lang: en, iso: US}
+      - {name: "الخارجية الأمريكية", url: "https://www.state.gov/rss-feed/press-releases/feed/", lang: en, iso: US}
+      - {name: "وزارة الحرب الأمريكية", url: "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=9&Site=945&max=10", lang: en, iso: US}
+      # --- مؤسسات إخبارية من القائمة
+      - {name: "Axios", url: "https://api.axios.com/feed/", lang: en, iso: US}
+      - {name: "ABC News", url: "https://abcnews.go.com/abcnews/internationalheadlines", lang: en, iso: US}
+      - {name: "NBC News", url: "https://feeds.nbcnews.com/nbcnews/public/world", lang: en, iso: US}
+      - {name: "Al Jazeera English", url: "https://www.aljazeera.com/xml/rss/all.xml", lang: en, iso: QA}
+      - {name: "CGTN", url: "https://www.cgtn.com/subscribe/rss/section/world.xml", lang: en, iso: CN}
+      - {name: "Drop Site", url: "https://www.dropsitenews.com/feed", lang: en, iso: US}
+      - {name: "Daily Caller", url: "https://dailycaller.com/feed/", lang: en, iso: US}
+      - {name: "Mirror World", url: "https://www.mirror.co.uk/news/world-news/?service=rss", lang: en, iso: GB}
