@@ -206,7 +206,8 @@ class MessageTests(unittest.TestCase):
         a.title_ar, a.translated = "أرامكو السعودية وتويوتا توقعان صفقة هيدروجين", True
         a.topic, a.summary, a.tone = "energy", "ملخص من جملتين.", "positive"
         msg = nb.format_message(a, CFG)
-        self.assertIn("#طاقة #اليابان #شرق_آسيا", msg)
+        self.assertNotIn("#", msg)                     # بلا وسوم افتراضيًا
+        self.assertIn("#طاقة #اليابان #شرق_آسيا", nb.format_message(a, {**CFG, "show_hashtags": True}))
         self.assertIn("🛢 طاقة · ⭐ 0 · 🇯🇵 Asahi", msg)
         self.assertTrue(msg.startswith("🇸🇦 <b>"))
         self.assertNotIn("━", msg)
@@ -434,9 +435,9 @@ class GulfTests(unittest.TestCase):
             self.assertTrue(before[0].startswith("🇸🇦 <b>"))   # خبر السعودية وقطر في قسم السعودية
             self.assertTrue(all(m[:2] in nb.GULF_FLAGS.values() for m in after))   # الخبر الخليجي يبدأ بعلم دولته
             self.assertEqual(sum(m.startswith("🇦🇪") for m in after), 3)   # حد الدولة الواحدة
-            self.assertEqual(sum("#أخبار_الكويت" in m for m in after), 1)
-            self.assertEqual(sum("#أخبار_عمان" in m for m in after), 1)
-            self.assertTrue(all("#الخليج" in m for m in after))
+            self.assertEqual(sum(m.startswith("🇰🇼") for m in after), 1)
+            self.assertEqual(sum(m.startswith("🇴🇲") for m in after), 1)
+            self.assertFalse(any("#" in m for m in tg.sent))   # بلا وسوم
 
     def test_no_separator_when_no_gulf_news_and_can_disable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -657,8 +658,29 @@ class SportsTopicTests(unittest.TestCase):
         self.assertEqual(nb.classify_topic("Arab Saudi vs Uzbekistan"), "sports")
         winger = art("شكوك حول مشاركة جناح السعودية أمام أوزبكستان", "filgoal.com", "ar")
         pats = nb.compile_terms(CFG["title_must_match_any"])
-        kept = nb.score_and_focus([winger], CFG, pats, NOW)
+        kept = nb.score_and_focus([winger], {**CFG, "exclude_topics": []}, pats, NOW)
         self.assertEqual(kept[0].topic, "sports")
+
+    def test_sports_and_athletes_are_dropped(self):
+        pats = nb.compile_terms(CFG["title_must_match_any"])
+        sports = [art("شكوك حول مشاركة جناح السعودية أمام أوزبكستان", "filgoal.com", "ar"),
+                  art("Saudi Arabia coach names squad for World Cup qualifier", "reuters.com"),
+                  art("Ronaldo scores twice as Saudi side wins", "bbc.com"),
+                  art("لاعبو مورينيو: ضيق الوقت لتعلم التكتيك قبل مواجهة السعودية 4-4-2", "example.kr", "ar")]
+        news = [art("Saudi Arabia signs investment deal with Japan", "reuters.com"),
+                art("السعودية تعلن هدف خفض الانبعاثات وتطلق سباق الطاقة النظيفة", "spa.gov.sa", "ar"),
+                art("Saudi transport ministry opens new metro line", "transport.gov.sa")]
+        kept = nb.score_and_focus(sports + news, CFG, pats, NOW)
+        self.assertEqual([a.title for a in kept], [a.title for a in news])
+
+    def test_non_sports_news_with_ambiguous_words_is_kept(self):
+        pats = nb.compile_terms(CFG["title_must_match_any"])
+        titles = ["محادثات ودية بين ولي العهد السعودي والرئيس الأمريكي", "الرئيس المنتخب يزور السعودية",
+                  "الاجتماع الدوري لمجلس التعاون ينعقد في السعودية", "السعودية ترسل مدربين عسكريين",
+                  "السعودية لاعب رئيسي في سوق النفط", "الهلال الأحمر السعودي يرسل مساعدات"]
+        kept = nb.score_and_focus([art(t, "spa.gov.sa", "ar") for t in titles], CFG, pats, NOW)
+        self.assertEqual([a.title for a in kept], titles)
+        self.assertNotIn("sports", {a.topic for a in kept})
 
     def test_unknown_source_scores_below_known_source(self):
         pats = nb.compile_terms(CFG["title_must_match_any"])
