@@ -240,6 +240,50 @@ _TOPIC_PATTERNS = {
 }
 
 
+# الخبر الرياضي (لاعبون، مدربون، مباريات) يُعرف بثلاث درجات حتى لا يُحذف خبر سياسي أو اقتصادي بالخطأ:
+# 1) كلمات صريحة لا تحتمل معنى آخر: واحدة تكفي.
+SPORTS_STRONG = ["كرة القدم", "كرة السلة", "كرة اليد", "كرة الطائرة", "مباراة", "حارس مرمى", "هداف", "ركلة",
+                 "مونديال", "كأس العالم", "كأس آسيا", "كأس الخليج", "دوري روشن", "دوري أبطال", "فورمولا", "ملاكمة",
+                 "مصارعة", "غولف", "تنس", "أولمبي", "أولمبياد", "رياضي", "رياضة", "رونالدو", "ميسي",
+                 "نيمار", "بنزيما", "مورينيو", "الأخضر السعودي", "نادي الهلال", "نادي النصر", "نادي الاتحاد",
+                 "نادي الأهلي", "football", "footballer*", "soccer", "fifa", "world cup", "asian cup", "gulf cup",
+                 "champions league", "premier league", "pro league", "national team", "striker", "midfielder",
+                 "goalkeeper", "winger", "head coach", "formula 1", "f1", "grand prix", "boxing", "golf", "tennis",
+                 "wwe", "esports", "olympic*", "sport", "sports", "athlete*", "ronaldo", "messi", "neymar", "benzema",
+                 "mourinho", "al hilal", "al nassr", "al ittihad", "timnas", "sepak bola", "futbol", "fútbol",
+                 "futebol", "fußball", "fussball", "calcio", "футбол", "сборная", "матч",
+                 "축구", "サッカー", "选手", "足球", "球员"]
+# 2) لاعب/مدرب: تكفي واحدة، إلا في التعبير المجازي ("لاعب رئيسي في السوق") أو العسكري ("مدربين عسكريين").
+SPORTS_PLAYER = ["لاعب", "لاعبو", "لاعبي", "مدرب"]
+_NOT_SPORT_AFTER = r"(?!\s+(?:ال)?(?:رئيسي|اساسي|مهم|كبير|محوري|عسكري|مؤثر|فاعل|اقليمي|عالمي|دولي|بارز|قوي|جديد)\w*)"
+# 3) كلمات لها معانٍ أخرى (الرئيس المنتخب، اجتماع دوري، محادثات ودية، مدافع): لا بد من اثنتين مختلفتين.
+SPORTS_WEAK = ["منتخب", "دوري", "مدافع", "مهاجم", "تشكيلة", "ودية", "تصفيات", "تكتيك", "ملعب", "بطولة", "نادي",
+               "الهلال", "النصر", "يسجل", "هدفين", "فوز", "يفوز", "league", "match", "cup", "club", "player",
+               "coach", "squad", "qualifier*", "goal", "goals", "defender", "감독", "선수", "전술"]
+_CJK = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def _sports_regex(keyword: str) -> str:
+    return re.escape(keyword) if _CJK.search(keyword) else _keyword_regex(keyword)
+
+
+_SPORTS_STRONG_RE = re.compile("|".join(_sports_regex(k) for k in sorted(SPORTS_STRONG, key=len, reverse=True)), re.U)
+_SPORTS_PLAYER_RE = re.compile("(?:" + "|".join(_keyword_regex(k) for k in SPORTS_PLAYER) + ")" + _NOT_SPORT_AFTER, re.U)
+_SPORTS_WEAK_RES = [re.compile(_sports_regex(k), re.U) for k in SPORTS_WEAK]
+_FORMATION_RE = re.compile(r"(?<!\d)[3-5]-[1-5]-[1-5](?:-[1-3])?(?!\d)")
+
+
+def is_sports_story(article) -> bool:
+    """خبر عن الرياضة أو اللاعبين والرياضيين: موقع رياضي، أو كلمة رياضية صريحة، أو قرينتان رياضيتان معًا."""
+    if is_sports_domain(article.domain):
+        return True
+    text = norm_ar(article.all_text().lower())
+    if _SPORTS_STRONG_RE.search(text) or _SPORTS_PLAYER_RE.search(text):
+        return True
+    weak = sum(1 for p in _SPORTS_WEAK_RES if p.search(text)) + bool(_FORMATION_RE.search(text))
+    return weak >= 2
+
+
 def classify_topic(text: str) -> str:
     text = norm_ar(text.lower())
     best, best_hits = "general", 0
@@ -1165,10 +1209,11 @@ def format_message(article: Article, cfg: dict) -> str:
         if when:
             lines.append(when)
         lines.append(f'🔗 <a href="{html.escape(article.url, quote=True)}">عرض المنشور</a>')
-        lines.append("#إكس")
+        if cfg.get("show_hashtags", False):
+            lines.append("#إكس")
         return "\n".join(lines)
 
-    # الشكل المختصر: العنوان، ثم سطر (الموضوع · النقاط · المصدر)، ثم (الوقت · الرابط)، ثم الوسوم
+    # الشكل المختصر: العنوان، ثم سطر (الموضوع · النقاط · المصدر)، ثم (الوقت · الرابط)، ثم الوسوم إن فُعّلت
     now = cfg.get("_now") or dt.datetime.now(RIYADH)
     breaking = cfg.get("breaking_mode", False) and article.breaking_score >= cfg.get("breaking_threshold", 78)
     flags = " ".join(GULF_FLAGS[i] for i in article.subjects) if is_gulf else "🇸🇦"
@@ -1207,6 +1252,8 @@ def format_message(article: Article, cfg: dict) -> str:
         links = [f'<a href="{html.escape(o.url, quote=True)}">{html.escape(o.source_name[:40])}</a>' for o in others[:4]]
         more = f" و{len(others) - 4} غيرها" if len(others) > 4 else ""
         lines.append("📎 نشره أيضًا: " + "، ".join(links) + more)
+    if not cfg.get("show_hashtags", False):
+        return "\n".join(lines)
     if is_gulf:
         # وسوم الخبر الخليجي تدل على الدولة موضوع الخبر، لا على دولة المصدر
         tags = ["#الخليج"] + [hashtag("أخبار " + gulf.NAMES_AR[i]) for i in article.subjects]
@@ -1281,16 +1328,24 @@ def add_arabic_titles(candidates, cfg, state, deadline, translate=translate_to_a
             article.translated = True
 
 
-def score_and_focus(candidates, cfg, pats, now=None):
+def score_and_focus(candidates, cfg, pats, now=None, state=None):
     """التصنيف والنقاط بعد الترجمة، ثم استبعاد ما لا يخص السعودية فعلًا."""
     weak = compile_terms(cfg.get("weak_terms", DEFAULT_WEAK_TERMS))
     weak_sources = {p.pattern for p in weak}
     strong = [p for p in pats if p.pattern not in weak_sources]
     now_utc = now.astimezone(dt.timezone.utc) if now else None
+    excluded = set(cfg.get("exclude_topics", []) or [])
     out = []
     for article in candidates:
         text = article.all_text()
         article.topic = "sports" if is_sports_domain(article.domain) else classify_topic(text)
+        if "sports" in excluded and is_sports_story(article):
+            article.topic = "sports"
+            if state is not None:
+                state.mark(article)  # لا يُعاد فحصه ولا ترجمته
+            continue
+        if article.topic == "sports" and "sports" in excluded:
+            article.topic = "general"  # كلمة عابرة (هدف، سباق) لا تجعل الخبر رياضيًا
         article.relevance_score = compute_relevance(article, pats)
         article.breaking_score = breaking_score(article, now_utc)
         article.tok_orig = story_tokens(article.title, article.lang)
@@ -1456,7 +1511,7 @@ def build_stories(articles, cfg, state, pats, deadline, now, match=None):
     """من المقالات الخام إلى أخبار جاهزة للاختيار: تصفية، ترجمة، نقاط، دمج المكرر، حذف ما سبق نشره."""
     candidates = prefilter(articles, cfg, state, pats, now, match)
     add_arabic_titles(candidates, cfg, state, deadline)
-    candidates = score_and_focus(candidates, cfg, pats, now)
+    candidates = score_and_focus(candidates, cfg, pats, now, state)
     candidates.sort(key=lambda a: (a.origin != "x",) + sort_key(a, cfg))
 
     dedupe_cfg = cfg.get("dedupe", {}) or {}
@@ -1490,6 +1545,10 @@ def send_stories(chosen, cfg, state, tg, archive, ai, deadline) -> int:
                 article.tone = info["tone"]
                 if info["topic"]:
                     article.topic = info["topic"]
+        if article.topic in set(cfg.get("exclude_topics", []) or []):
+            for member in [article] + article.also:
+                state.mark(member)
+            continue
         if tg.send_text(format_message(article, cfg)):
             for member in [article] + article.also:
                 state.mark(member)
