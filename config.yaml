@@ -215,6 +215,11 @@ x:
     - Scavino47
     - PressSec
 
+# أخبار Bing: مجمّع ثانٍ مجاني بجانب أخبار Google، يستخدم النسخ واللغات نفسها (editions أدناه)
+bing_news:
+  enabled: true
+  parallel: 8
+
 google_news:
   enabled: true
   recency: "6h"             # يطلب من أخبار Google ما نُشر خلال آخر 6 ساعات فقط
@@ -443,6 +448,7 @@ flash_minutes: 20
 # فلا يُنشر منها إلا ما يذكر السعودية أو دول الخليج.
 direct_feeds:
   enabled: true
+  priority_bonus: 15        # المصادر المباشرة لها الأولوية: نقاط إضافية، وتمثّل الخبر إذا تكرر من مجمّع
   parallel: 12
   timeout_sec: 10
   feeds:

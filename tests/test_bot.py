@@ -391,6 +391,72 @@ class ConfigTests(unittest.TestCase):
             state.save()
 
 
+BING_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:News="https://www.bing.com/news/search?q=saudi&amp;format=rss">
+<channel><title>Saudi Arabia - BingNews</title>
+<item><title>Saudi Arabia signs new energy deal with Korea</title>
+<link>http://www.bing.com/news/apiclick.aspx?ref=FexRss&amp;aid=&amp;tid=1&amp;url=https%3a%2f%2fwww.reuters.com%2fworld%2fsaudi-energy-deal&amp;c=1</link>
+<description>...</description><pubDate>Fri, 13 Nov 2026 20:50:00 GMT</pubDate>
+<News:Source>Reuters on MSN</News:Source></item>
+<item><title></title><link>http://www.bing.com/x</link></item>
+</channel></rss>"""
+
+
+class BingNewsTests(unittest.TestCase):
+    ED = {"lang": "en", "hl": "en-US", "gl": "US", "country_ar": "أمريكا"}
+
+    def test_parse_gives_real_link_and_source(self):
+        items = nb.parse_bing_rss(BING_RSS.encode(), self.ED)
+        self.assertEqual(len(items), 1)
+        a = items[0]
+        self.assertEqual(a.origin, "bing")
+        self.assertEqual(a.domain, "reuters.com")
+        self.assertEqual(a.source_name, "Reuters")
+        self.assertTrue(a.url.startswith("https://www.reuters.com/"))
+        self.assertIsNotNone(a.published)
+
+    def test_html_page_is_not_a_feed(self):
+        self.assertIsNone(nb.parse_bing_rss(b"<html><body>captcha</body></html>", self.ED))
+
+    def test_market_from_edition(self):
+        self.assertEqual(nb.bing_market({"hl": "ar", "gl": "SA"}), "ar-SA")
+        self.assertEqual(nb.bing_market({"hl": "zh-CN", "gl": "CN"}), "zh-CN")
+
+    def test_bing_runs_in_wide_check_not_instant(self):
+        calls = []
+        orig = nb.fetch_bing
+        nb.fetch_bing = lambda c, d, **k: (calls.append(1), ([], {}, ("ok", "")))[1]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                state, tg = new_state(tmp), Recorder()
+                nb.run(CFG, state, tg, archive=Archive(Path(tmp) / "a"), now=NOW,
+                       fetchers={"bing": lambda c, d: nb.fetch_bing(c, d)})
+        finally:
+            nb.fetch_bing = orig
+        self.assertTrue(calls)
+
+
+class DirectPriorityTests(unittest.TestCase):
+    def test_direct_source_represents_duplicate_story(self):
+        title = "Saudi Arabia signs $5 billion investment deal with Japan"
+        via_google = art(title, domain="reuters.com", origin="gnews", minutes_ago=10)
+        direct = art(title + " ", domain="arabnews.com", origin="feed", minutes_ago=12)
+        with tempfile.TemporaryDirectory() as tmp:
+            state, tg = new_state(tmp), Recorder()
+            stories = nb.build_stories([via_google, direct], CFG, state, nb.compile_terms(CFG["title_must_match_any"]),
+                                       time.monotonic() + 60, NOW)
+        self.assertTrue(stories)
+        self.assertEqual(stories[0].origin, "feed")
+
+    def test_direct_bonus_in_ranking(self):
+        a = art("Saudi Arabia opens new port in Jeddah", origin="gnews")
+        b = art("Saudi Arabia opens new airport in Abha", origin="feed")
+        a.relevance_score = b.relevance_score = 50
+        a.source_score = b.source_score = 40
+        cfg = {**CFG, "_now": NOW}
+        self.assertLess(nb.sort_key(b, cfg), nb.sort_key(a, cfg))
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -690,6 +756,72 @@ class SportsTopicTests(unittest.TestCase):
             nb.assign_tier(a, CFG)
         nb.score_and_focus([unknown, known], CFG, pats, NOW)
         self.assertLess(unknown.breaking_score, known.breaking_score)
+
+
+BING_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:News="https://www.bing.com/news/search?q=saudi&amp;format=rss">
+<channel><title>Saudi Arabia - BingNews</title>
+<item><title>Saudi Arabia signs new energy deal with Korea</title>
+<link>http://www.bing.com/news/apiclick.aspx?ref=FexRss&amp;aid=&amp;tid=1&amp;url=https%3a%2f%2fwww.reuters.com%2fworld%2fsaudi-energy-deal&amp;c=1</link>
+<description>...</description><pubDate>Fri, 13 Nov 2026 20:50:00 GMT</pubDate>
+<News:Source>Reuters on MSN</News:Source></item>
+<item><title></title><link>http://www.bing.com/x</link></item>
+</channel></rss>"""
+
+
+class BingNewsTests(unittest.TestCase):
+    ED = {"lang": "en", "hl": "en-US", "gl": "US", "country_ar": "أمريكا"}
+
+    def test_parse_gives_real_link_and_source(self):
+        items = nb.parse_bing_rss(BING_RSS.encode(), self.ED)
+        self.assertEqual(len(items), 1)
+        a = items[0]
+        self.assertEqual(a.origin, "bing")
+        self.assertEqual(a.domain, "reuters.com")
+        self.assertEqual(a.source_name, "Reuters")
+        self.assertTrue(a.url.startswith("https://www.reuters.com/"))
+        self.assertIsNotNone(a.published)
+
+    def test_html_page_is_not_a_feed(self):
+        self.assertIsNone(nb.parse_bing_rss(b"<html><body>captcha</body></html>", self.ED))
+
+    def test_market_from_edition(self):
+        self.assertEqual(nb.bing_market({"hl": "ar", "gl": "SA"}), "ar-SA")
+        self.assertEqual(nb.bing_market({"hl": "zh-CN", "gl": "CN"}), "zh-CN")
+
+    def test_bing_runs_in_wide_check_not_instant(self):
+        calls = []
+        orig = nb.fetch_bing
+        nb.fetch_bing = lambda c, d, **k: (calls.append(1), ([], {}, ("ok", "")))[1]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                state, tg = new_state(tmp), Recorder()
+                nb.run(CFG, state, tg, archive=Archive(Path(tmp) / "a"), now=NOW,
+                       fetchers={"bing": lambda c, d: nb.fetch_bing(c, d)})
+        finally:
+            nb.fetch_bing = orig
+        self.assertTrue(calls)
+
+
+class DirectPriorityTests(unittest.TestCase):
+    def test_direct_source_represents_duplicate_story(self):
+        title = "Saudi Arabia signs $5 billion investment deal with Japan"
+        via_google = art(title, domain="reuters.com", origin="gnews", minutes_ago=10)
+        direct = art(title + " ", domain="arabnews.com", origin="feed", minutes_ago=12)
+        with tempfile.TemporaryDirectory() as tmp:
+            state, tg = new_state(tmp), Recorder()
+            stories = nb.build_stories([via_google, direct], CFG, state, nb.compile_terms(CFG["title_must_match_any"]),
+                                       time.monotonic() + 60, NOW)
+        self.assertTrue(stories)
+        self.assertEqual(stories[0].origin, "feed")
+
+    def test_direct_bonus_in_ranking(self):
+        a = art("Saudi Arabia opens new port in Jeddah", origin="gnews")
+        b = art("Saudi Arabia opens new airport in Abha", origin="feed")
+        a.relevance_score = b.relevance_score = 50
+        a.source_score = b.source_score = 40
+        cfg = {**CFG, "_now": NOW}
+        self.assertLess(nb.sort_key(b, cfg), nb.sort_key(a, cfg))
 
 
 if __name__ == "__main__":
