@@ -122,7 +122,8 @@ SOURCE_PRIORITY = {"reuters.com": 120, "apnews.com": 115, "bbc.com": 110, "bbc.c
     "haaretz.com": 82, "scmp.com": 84, "nikkei.com": 82, "koreaherald.com": 80,
     "thejakartapost.com": 78, "dawn.com": 78, "xinhuanet.com": 70, "cgtn.com": 68,
     "tass.com": 67, "rt.com": 66}
-SOURCE_NAMES_AR = {"x": "منصة X", "gnews": "أخبار Google", "gdelt": "قاعدة GDELT", "feeds": "المصادر المباشرة"}
+SOURCE_NAMES_AR = {"x": "منصة X", "gnews": "أخبار Google", "bing": "أخبار Bing", "gdelt": "قاعدة GDELT",
+                   "feeds": "المصادر المباشرة"}
 # مواقع رياضية: خبرها رياضي ولو لم يحمل العنوان كلمة رياضية صريحة
 SPORTS_DOMAINS = {"filgoal.com", "kooora.com", "yallakora.com", "goal.com", "espn.com", "skysports.com", "marca.com",
                   "as.com", "lequipe.fr", "gazzetta.it", "arriyadiyah.com", "beinsports.com", "btolat.com",
@@ -843,6 +844,110 @@ def fetch_gnews(cfg, deadline, query_for=None, label="gnews"):
     return out, counts, _status(ok, attempted, detail)
 
 
+# ---------------------------------------------------------------- أخبار Bing (مجمّع ثانٍ بجانب أخبار Google)
+def bing_market(edition: dict) -> str:
+    """سوق Bing لنسخة أخبار Google: en-US و ar-SA و zh-CN ..."""
+    if edition.get("bing_mkt"):
+        return edition["bing_mkt"]
+    hl, gl = edition.get("hl", "en-US"), edition.get("gl", "US")
+    return hl if "-" in hl else f"{hl}-{gl}"
+
+
+def bing_real_url(link: str) -> str:
+    """Bing يمرر الرابط عبر apiclick.aspx؛ الرابط الحقيقي للخبر في المعامل url."""
+    try:
+        p = urlparse(link)
+        if p.netloc.lower().endswith("bing.com"):
+            real = dict(parse_qsl(p.query)).get("url")
+            if real and real.startswith("http"):
+                return real
+    except Exception:
+        pass
+    return link
+
+
+def parse_bing_rss(xml_bytes, edition):
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return None
+    if _local(root.tag) != "rss":
+        return None
+    out = []
+    for item in root.iter("item"):
+        title = link = date_text = source_name = ""
+        for child in item:
+            name = _local(child.tag)
+            if name == "title":
+                title = (child.text or "").strip()
+            elif name == "link":
+                link = (child.text or "").strip()
+            elif name == "pubdate":
+                date_text = child.text or ""
+            elif name == "source":
+                source_name = (child.text or "").strip()
+        title = re.sub(r"\s+", " ", html.unescape(_TAGS.sub("", title))).strip()
+        link = bing_real_url(link)
+        if not title or not link.startswith("http"):
+            continue
+        domain = host_of(link)
+        # «... on MSN»: المصدر الأصلي منشور عبر MSN
+        source_name = re.sub(r"\s+on MSN$", "", source_name, flags=re.I) or domain or "Bing"
+        article = Article(title, link, domain, source_name, edition.get("lang", "en"), edition.get("country_ar", ""),
+                          parse_feed_date(date_text), "bing", True)
+        resolve_geo(article, hint_iso=edition.get("gl", ""), prefer_domain=True)
+        out.append(article)
+    return out
+
+
+def fetch_bing(cfg, deadline, query_for=None, label="bing"):
+    """أخبار Bing بالنسخ واللغات نفسها المستخدمة مع أخبار Google، مرتبة من الأحدث."""
+    bn = cfg.get("bing_news", {}) or {}
+    if not bn.get("enabled", True):
+        return [], {}, ("skip", "")
+    gn = cfg.get("google_news", {}) or {}
+    jobs = []
+    for ed in bn.get("editions") or gn.get("editions", []):
+        q = query_for(ed) if query_for else ed.get("query", '"Saudi Arabia"')
+        if not q:
+            continue
+        mkt = bing_market(ed)
+        url = ("https://www.bing.com/news/search?format=rss&count=50&q=" + quote_plus(q)
+               + "&mkt=" + quote_plus(mkt) + "&setlang=" + quote_plus(mkt.split("-")[0])
+               + "&qft=" + quote_plus('sortbydate="1"'))
+        jobs.append((ed, f"{label}:{mkt}", url))
+
+    def fetch_one(job):
+        if time.monotonic() > deadline:
+            return None
+        return http_get(job[2], timeout=15, headers={"Accept": "application/rss+xml, application/xml, text/xml, */*"})
+
+    with ThreadPoolExecutor(max_workers=max(1, int(bn.get("parallel", 8)))) as pool:
+        responses = list(pool.map(fetch_one, jobs))
+    out, counts = [], {}
+    ok = 0
+    detail = ""
+    for (ed, key, _), r in zip(jobs, responses):
+        counts[key] = 0
+        if r is None or r.status_code != 200:
+            detail = "تعذر الاتصال" if r is None else f"HTTP {r.status_code}"
+            continue
+        items = parse_bing_rss(r.content, ed)
+        if items is None:
+            detail = "رد غير مفهوم"
+            continue
+        ok += 1
+        counts[key] = len(items)
+        out.extend(items)
+    return out, counts, _status(ok, len(jobs), detail)
+
+
+def fetch_gulf_bing(cfg, deadline):
+    if not (cfg.get("gulf", {}) or {}).get("enabled", True):
+        return [], {}, ("skip", "")
+    return fetch_bing(cfg, deadline, query_for=gulf.query_for, label="gulf-bing")
+
+
 # ---------------------------------------------------------------- المصادر المباشرة (RSS / Atom)
 _TAGS = re.compile(r"<[^>]+>")
 
@@ -1285,7 +1390,8 @@ def prefilter(articles, cfg, state, pats, now=None, match=None):
     """يبقي الحديث، المطابق لكلمات القسم، غير المرسل سابقًا، بلا تكرار حرفي."""
     max_age = cfg.get("max_age_hours", 24)
     out, seen = [], set()
-    for article in articles:
+    # نسخة المصدر المباشر تسبق نسخة المجمّع عند التطابق الحرفي، فيبقى رابط المصدر الأصلي
+    for article in sorted(articles, key=lambda a: (a.origin != "x", a.origin != "feed")):
         if not is_recent(article, max_age, now):
             continue
         if match is not None:
@@ -1299,7 +1405,9 @@ def prefilter(articles, cfg, state, pats, now=None, match=None):
         seen.update({article.uid, dedupe})
         assign_tier(article, cfg)
         out.append(article)
-    out.sort(key=lambda a: (a.origin != "x", -a.source_score, -(a.published.timestamp() if a.published else 0)))
+    # المصادر المباشرة أولًا بعد X: لا يقصيها سقف المرشحين، وتمثّل خبرها عند التكرار
+    out.sort(key=lambda a: (a.origin != "x", a.origin != "feed", -a.source_score,
+                            -(a.published.timestamp() if a.published else 0)))
     return out[: cfg.get("max_candidates", 80)]
 
 
@@ -1368,6 +1476,8 @@ def sort_key(article: Article, cfg: dict):
         now = cfg.get("_now") or dt.datetime.now(dt.timezone.utc)
         age = max(0.0, (now - article.published).total_seconds() / 3600)
         bonus += int(30 * max(0.0, 1 - age / fresh_hours))
+    if article.origin == "feed" or any(m.origin == "feed" for m in article.also):
+        bonus += int((cfg.get("direct_feeds", {}) or {}).get("priority_bonus", 15))
     return (-(main + bonus), -article.source_score, -(article.published.timestamp() if article.published else 0))
 
 
@@ -1512,7 +1622,8 @@ def build_stories(articles, cfg, state, pats, deadline, now, match=None):
     candidates = prefilter(articles, cfg, state, pats, now, match)
     add_arabic_titles(candidates, cfg, state, deadline)
     candidates = score_and_focus(candidates, cfg, pats, now, state)
-    candidates.sort(key=lambda a: (a.origin != "x",) + sort_key(a, cfg))
+    # الخبر المكرر يمثّله المصدر المباشر إن وُجد (رابطه ووقته هما الأصل)
+    candidates.sort(key=lambda a: (a.origin != "x", a.origin != "feed") + sort_key(a, cfg))
 
     dedupe_cfg = cfg.get("dedupe", {}) or {}
     threshold = float(dedupe_cfg.get("similarity", 0.6))
@@ -1592,6 +1703,7 @@ def run(cfg: dict, state: State, tg: Telegram, fast=False, breaking=False, archi
 
     deadline = time.monotonic() + cfg.get("total_time_budget_sec", 900)
     default_fetchers = {"x": fetch_x, "feeds": fetch_feeds, "gnews": fetch_gnews, "gulf_gnews": fetch_gulf_gnews,
+                        "bing": fetch_bing, "gulf_bing": fetch_gulf_bing,
                         "gdelt": fetch_gdelt, "gulf_gdelt": fetch_gulf_gdelt}
     if instant:
         default_fetchers = {"x": fetch_x, "feeds": fetch_feeds}
